@@ -1,0 +1,25 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.14.36221.1 d17.14
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "C_SHARP_MNI_FTP_UPLOADER_2025", "C_SHARP_MNI_FTP_UPLOADER_2025.csproj", "{DCEDF8C3-308E-4016-B82E-E32844FE0785}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{DCEDF8C3-308E-4016-B82E-E32844FE0785}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{DCEDF8C3-308E-4016-B82E-E32844FE0785}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{DCEDF8C3-308E-4016-B82E-E32844FE0785}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{DCEDF8C3-308E-4016-B82E-E32844FE0785}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {8BC51986-9B2D-4AF0-8895-F81BDD9ED4D2}
+	EndGlobalSection
+EndGlobal

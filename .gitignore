@@ -1,0 +1,21 @@
+# Visual Studio files
+.vs/
+*.user
+*.suo
+
+# Cache files (keeping executables and packages for ready-to-run)
+obj/*/*.cache
+obj/*/DesignTimeResolve*
+
+# User files
+*.userosscache
+*.sln.docstates
+
+# Windows files
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# Keep all executables, DLLs, and packages
+# This project is ready-to-run after download!

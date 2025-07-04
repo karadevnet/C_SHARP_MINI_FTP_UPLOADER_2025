@@ -1,0 +1,7 @@
+host=192.168.88.222
+port=22
+username=root
+password=S0tBcmFkZXZuZXQxOTc1
+remotepath=/var/www/html/serverdbadminsetup
+localpath=E:\IT_Server_DB_Admin_Setup\serverdbadminsetup
+saved_date=2025-07-04 14:57:02
