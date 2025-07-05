@@ -222,25 +222,36 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
         {       // BUTTON SELECT PATH LOCAL
             try
             {
-                // Use FolderBrowserDialog for proper folder selection with "OK" button
-                using (FolderBrowserDialog folderDialog = new FolderBrowserDialog())
+                // Use OpenFileDialog with modern Windows Explorer design for folder selection
+                using (OpenFileDialog folderDialog = new OpenFileDialog())
                 {
-                    folderDialog.Description = "Select the main project folder to upload";
-                    folderDialog.ShowNewFolderButton = true;
+                    folderDialog.Title = "Select the main project folder to upload";
+                    folderDialog.Filter = "All files (*.*)|*.*";
+                    folderDialog.FileName = "Select this folder";
+                    folderDialog.CheckFileExists = false;
+                    folderDialog.CheckPathExists = true;
+                    folderDialog.ValidateNames = false;
+                    folderDialog.Multiselect = false;
                     
                     // Set initial directory to last selected path or user's documents
                     if (!string.IsNullOrEmpty(selectedPath) && Directory.Exists(selectedPath))
                     {
-                        folderDialog.SelectedPath = selectedPath;
+                        folderDialog.InitialDirectory = selectedPath;
                     }
                     else
                     {
-                        folderDialog.SelectedPath = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+                        folderDialog.InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
                     }
                     
                     if (folderDialog.ShowDialog() == DialogResult.OK)
                     {
-                        selectedPath = folderDialog.SelectedPath;
+                        // Get the directory from the selected file path
+                        selectedPath = Path.GetDirectoryName(folderDialog.FileName);
+                        if (string.IsNullOrEmpty(selectedPath))
+                        {
+                            selectedPath = folderDialog.FileName; // Fallback
+                        }
+                        
                         label3.Text = selectedPath;
                         
                         // Update textBox6 with just the selected folder name
