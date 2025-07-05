@@ -1,0 +1,7 @@
+host=192.168.88.222
+port=22
+username=root
+password=S0tBcmFkZXZuZXQxOTc1
+remotepath=/var/www/html/smallusersystem
+localpath=E:\IT_WEB_SITE_CHAT_ADD_2025_WORK\VS_CODE_EDIT_WORK_TEMP
+saved_date=2025-07-04 16:35:19

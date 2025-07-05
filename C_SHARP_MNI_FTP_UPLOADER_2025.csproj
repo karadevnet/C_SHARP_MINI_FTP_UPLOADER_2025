@@ -35,7 +35,7 @@
     <WarningLevel>4</WarningLevel>
   </PropertyGroup>
   <PropertyGroup>
-    <ApplicationIcon>C#1_ftp_icon.ico</ApplicationIcon>
+    <ApplicationIcon>C#3_ftp_icon.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="System" />
@@ -90,6 +90,7 @@
   </ItemGroup>
   <ItemGroup>
     <Content Include="C#1_ftp_icon.ico" />
+    <Content Include="C#3_ftp_icon.ico" />
     <Content Include="C#_ftp_icon.ico" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />

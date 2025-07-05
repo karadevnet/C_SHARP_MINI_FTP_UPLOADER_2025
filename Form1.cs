@@ -27,11 +27,31 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
 
         private void Form1_Load(object sender, EventArgs e)
         {
+            // Clear all fields on program start
+            textBox1.Text = "";      // Host
+            textBox2.Text = "22";    // Port (keep default)
+            textBox3.Text = "";      // Username
+            textBox4.Text = "";      // Password
+            textBox5.Text = "";      // Remote path
+            textBox6.Text = "";      // Remote folder name
+            
+            // Clear path-related fields
+            selectedPath = string.Empty;
+            label3.Text = "";
+            
+            // Clear the output text box
+            richTextBox1.Text = "";
+            
+            // Set button state
             button1.Text = "DISCONNECTED";
-            textBox2.Text = "22"; // Set default SFTP port
+            button1.BackColor = System.Drawing.SystemColors.ButtonFace;
             
             // Add form closing event handler for cleanup
             this.FormClosing += Form1_FormClosing;
+            
+            // Welcome message
+            richTextBox1.AppendText("SFTP Uploader ready. All fields cleared.\n");
+            richTextBox1.ScrollToCaret();
         }
 
         private void Form1_FormClosing(object sender, FormClosingEventArgs e)
@@ -202,34 +222,36 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
         {       // BUTTON SELECT PATH LOCAL
             try
             {
-                // Use OpenFileDialog configured for folder selection (modern Windows Explorer style)
-                using (OpenFileDialog folderDialog = new OpenFileDialog())
+                // Use FolderBrowserDialog for proper folder selection with "OK" button
+                using (FolderBrowserDialog folderDialog = new FolderBrowserDialog())
                 {
-                    folderDialog.Title = "Select the main project folder";
-                    folderDialog.Filter = "Folders|\n";
-                    folderDialog.AddExtension = false;
-                    folderDialog.CheckFileExists = false;
-                    folderDialog.CheckPathExists = true;
-                    folderDialog.DereferenceLinks = true;
-                    folderDialog.Multiselect = false;
-                    folderDialog.ValidateNames = false;
-                    folderDialog.FileName = "Select Folder";
+                    folderDialog.Description = "Select the main project folder to upload";
+                    folderDialog.ShowNewFolderButton = true;
                     
                     // Set initial directory to last selected path or user's documents
                     if (!string.IsNullOrEmpty(selectedPath) && Directory.Exists(selectedPath))
                     {
-                        folderDialog.InitialDirectory = selectedPath;
+                        folderDialog.SelectedPath = selectedPath;
                     }
                     else
                     {
-                        folderDialog.InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+                        folderDialog.SelectedPath = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
                     }
                     
                     if (folderDialog.ShowDialog() == DialogResult.OK)
                     {
-                        // Get the directory from the selected path
-                        selectedPath = Path.GetDirectoryName(folderDialog.FileName);
+                        selectedPath = folderDialog.SelectedPath;
                         label3.Text = selectedPath;
+                        
+                        // Update textBox6 with just the selected folder name
+                        string folderName = Path.GetFileName(selectedPath);
+                        if (string.IsNullOrEmpty(folderName))
+                        {
+                            // Handle root drives like C:\ 
+                            folderName = selectedPath.Replace("\\", "").Replace(":", "");
+                        }
+                        textBox6.Text = "/" + folderName;
+                        
                         richTextBox1.AppendText($"Selected local path: {selectedPath}\n");
                         richTextBox1.ScrollToCaret();
                     }
@@ -430,6 +452,16 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
                                     {
                                         selectedPath = value;
                                         label3.Text = selectedPath;
+                                        
+                                        // Update textBox6 with just the selected folder name
+                                        string folderName = Path.GetFileName(selectedPath);
+                                        if (string.IsNullOrEmpty(folderName))
+                                        {
+                                            // Handle root drives like C:\ 
+                                            folderName = selectedPath.Replace("\\", "").Replace(":", "");
+                                        }
+                                        textBox6.Text = "/" + folderName;
+                                        
                                         loadedCount++;
                                     }
                                     else if (!string.IsNullOrEmpty(value))

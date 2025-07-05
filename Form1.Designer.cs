@@ -169,7 +169,7 @@
             this.textBox4.PasswordChar = '#';
             this.textBox4.Size = new System.Drawing.Size(183, 22);
             this.textBox4.TabIndex = 11;
-            this.textBox4.Text = "KKAradevnet1975";
+            this.textBox4.Text = "###############";
             // 
             // richTextBox1
             // 
