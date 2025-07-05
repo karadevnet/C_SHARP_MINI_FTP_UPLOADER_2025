@@ -252,6 +252,13 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
                             selectedPath = folderDialog.FileName; // Fallback
                         }
                         
+                        // Ensure we have a valid directory path
+                        if (File.Exists(selectedPath))
+                        {
+                            selectedPath = Path.GetDirectoryName(selectedPath);
+                        }
+                        
+                        // Always show the full path in label3
                         label3.Text = selectedPath;
                         
                         // Update textBox6 with just the selected folder name
