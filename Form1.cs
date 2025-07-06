@@ -2,6 +2,7 @@
 using System.Drawing;
 using System.IO;
 using System.Text;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using WinSCP;
 
@@ -41,6 +42,9 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
             
             // Clear the output text box
             richTextBox1.Text = "";
+            
+            // Reset progress bar
+            progressBar1.Value = 0;
             
             // Set button state
             button1.Text = "DISCONNECTED";
@@ -108,6 +112,57 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
                 return ""; // Return empty if decoding fails
             }
         }
+
+        // ==== NEW TEST CODE - FILE SIZE CALCULATION ====
+        private long CalculateTotalFileSize(string folderPath)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(folderPath) || !Directory.Exists(folderPath))
+                    return 0;
+
+                string[] allFiles = Directory.GetFiles(folderPath, "*.*", SearchOption.AllDirectories);
+                long totalSize = 0;
+
+                foreach (string file in allFiles)
+                {
+                    try
+                    {
+                        FileInfo fileInfo = new FileInfo(file);
+                        totalSize += fileInfo.Length;
+                    }
+                    catch
+                    {
+                        // Skip files that can't be accessed
+                        continue;
+                    }
+                }
+
+                return totalSize;
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+
+        private string FormatFileSize(long bytes)
+        {
+            if (bytes == 0) return "0 B";
+            
+            string[] sizes = { "B", "KB", "MB", "GB" };
+            int order = 0;
+            double size = bytes;
+            
+            while (size >= 1024 && order < sizes.Length - 1)
+            {
+                order++;
+                size = size / 1024;
+            }
+            
+            return $"{size:0.##} {sizes[order]}";
+        }
+        // ==== END NEW TEST CODE ====
 
         private void button1_Click(object sender, EventArgs e)
         {   // BUTTON CONNECT/DISCONNECT
@@ -272,6 +327,13 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
                         
                         richTextBox1.AppendText($"Selected local path: {selectedPath}\n");
                         richTextBox1.ScrollToCaret();
+                        
+                        // ==== NEW TEST CODE - SHOW FILE SIZE INFO ====
+                        long totalSize = CalculateTotalFileSize(selectedPath);
+                        string[] files = Directory.GetFiles(selectedPath, "*.*", SearchOption.AllDirectories);
+                        richTextBox1.AppendText($"Folder contains: {files.Length} files, Total size: {FormatFileSize(totalSize)}\n");
+                        richTextBox1.ScrollToCaret();
+                        // ==== END NEW TEST CODE ====
                     }
                     else
                     {
@@ -289,7 +351,9 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
 
         private void button2_Click(object sender, EventArgs e)
         {       // BUTTON UPLOAD
-            // Check if session is connected
+            /*
+            // CLEAN SIMPLE UPLOAD CODE - WORKING VERSION (BACKUP)
+            // Basic validation
             if (session == null || !session.Opened)
             {
                 richTextBox1.AppendText("Error: Not connected to SFTP server.\n");
@@ -297,7 +361,6 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
                 return;
             }
 
-            // Check if a path is selected
             if (string.IsNullOrWhiteSpace(selectedPath))
             {
                 richTextBox1.AppendText("Error: No local path selected.\n");
@@ -305,7 +368,6 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
                 return;
             }
 
-            // Check if remote path is set
             if (string.IsNullOrWhiteSpace(remotePath))
             {
                 richTextBox1.AppendText("Error: Remote path is not set.\n");
@@ -313,57 +375,190 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
                 return;
             }
 
+            // Store original path for restoration later
+            string originalPath = label3.Text;
+
             try
             {
-                // Upload the selected path to the SFTP server
-                TransferOptions transferOptions = new TransferOptions
-                {
-                    TransferMode = TransferMode.Binary
-                };
-                
                 richTextBox1.AppendText("Starting upload...\n");
                 richTextBox1.ScrollToCaret();
-                TransferOperationResult transferResult = session.PutFiles(selectedPath, remotePath, false, transferOptions);
+
+                // Get all files from selected folder using array
+                string[] allFiles = Directory.GetFiles(selectedPath, "*.*", SearchOption.AllDirectories);
                 
-                // Check for errors and provide detailed feedback
-                if (transferResult.IsSuccess)
+                richTextBox1.AppendText($"Found {allFiles.Length} files to upload\n");
+                richTextBox1.ScrollToCaret();
+
+                // Reset progress bar to start clean
+                progressBar1.Value = 0;
+
+                // Upload files one by one using array
+                for (int i = 0; i < allFiles.Length; i++)
                 {
-                    richTextBox1.AppendText($"Upload completed successfully! {transferResult.Transfers.Count} files uploaded.\n");
-                    richTextBox1.ScrollToCaret();
-                    foreach (TransferEventArgs transfer in transferResult.Transfers)
+                    string currentFile = allFiles[i];
+                    
+                    // Show current file in label3
+                    string fileName = Path.GetFileName(currentFile);
+                    label3.Text = fileName;
+                    
+                    // Calculate relative path for remote upload
+                    string relativePath = currentFile.Replace(selectedPath, "").TrimStart('\\', '/');
+                    string remoteFilePath = remotePath + "/" + relativePath.Replace('\\', '/');
+                    string remoteDir = Path.GetDirectoryName(remoteFilePath).Replace('\\', '/');
+                    
+                    // Set transfer options
+                    TransferOptions transferOptions = new TransferOptions
                     {
-                        string relativePath = transfer.FileName.Replace(selectedPath, "").TrimStart('\\', '/');
-                        richTextBox1.AppendText($"✓ Uploaded: {relativePath}\n");
-                        richTextBox1.ScrollToCaret();
-                    }
+                        TransferMode = TransferMode.Binary
+                    };
+                    
+                    // Upload single file
+                    session.PutFiles(currentFile, remoteDir + "/", false, transferOptions);
+                    
+                    // Update progress bar - simple calculation
+                    progressBar1.Value = (i + 1) * 100 / allFiles.Length;
+                    
+                    // Update progress in rich text box
+                    richTextBox1.AppendText($"✓ {i + 1}/{allFiles.Length}: {fileName}\n");
+                    richTextBox1.ScrollToCaret();
                 }
-                else
+                
+                richTextBox1.AppendText("Upload completed successfully!\n");
+                richTextBox1.ScrollToCaret();
+                
+                // Keep progress bar at 100% to show completion
+                progressBar1.Value = 100;
+                
+                // Wait 1 second then reset progress bar to clean state
+                Task.Delay(1000).ContinueWith(t => 
                 {
-                    richTextBox1.AppendText("Upload completed with errors:\n");
-                    richTextBox1.ScrollToCaret();
-                    foreach (TransferEventArgs transfer in transferResult.Transfers)
-                    {
-                        string relativePath = transfer.FileName.Replace(selectedPath, "").TrimStart('\\', '/');
-                        if (transfer.Error == null)
-                        {
-                            richTextBox1.AppendText($"✓ Uploaded: {relativePath}\n");
-                            richTextBox1.ScrollToCaret();
-                        }
-                        else
-                        {
-                            richTextBox1.AppendText($"✗ Failed: {relativePath} - {transfer.Error.Message}\n");
-                            richTextBox1.ScrollToCaret();
-                        }
-                    }
-                }
+                    if (this.InvokeRequired)
+                        this.Invoke(new Action(() => progressBar1.Value = 0));
+                    else
+                        progressBar1.Value = 0;
+                });
+                
+                // Restore original full path in label3
+                label3.Text = originalPath;
             }
             catch (Exception ex)
             {
-                richTextBox1.AppendText($"Upload error: {ex.Message}\n");
+                // Reset progress bar on error
+                progressBar1.Value = 0;
+                // Restore original path in case of error
+                label3.Text = originalPath;
+                richTextBox1.AppendText($"✗ Upload failed: {ex.Message}\n");
                 richTextBox1.ScrollToCaret();
             }
+            */
+            
+            // ==== NEW TEST CODE - FILE SIZE BASED UPLOAD PROGRESS ====
+            // Basic validation
+            if (session == null || !session.Opened)
+            {
+                richTextBox1.AppendText("Error: Not connected to SFTP server.\n");
+                richTextBox1.ScrollToCaret();
+                return;
+            }
 
-            // 
+            if (string.IsNullOrWhiteSpace(selectedPath))
+            {
+                richTextBox1.AppendText("Error: No local path selected.\n");
+                richTextBox1.ScrollToCaret();
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(remotePath))
+            {
+                richTextBox1.AppendText("Error: Remote path is not set.\n");
+                richTextBox1.ScrollToCaret();
+                return;
+            }
+
+            // Store original path for restoration later
+            string originalPath = label3.Text;
+            richTextBox1.Clear();
+
+            try
+            {
+                richTextBox1.AppendText("Starting upload with file-size progress...\n");
+                richTextBox1.ScrollToCaret();
+
+                // Get all files and calculate total size
+                string[] allFiles = Directory.GetFiles(selectedPath, "*.*", SearchOption.AllDirectories);
+                long totalSize = CalculateTotalFileSize(selectedPath);
+                long uploadedSize = 0;
+                
+                richTextBox1.AppendText($"Found {allFiles.Length} files, Total size: {FormatFileSize(totalSize)}\n");
+                richTextBox1.ScrollToCaret();
+
+                // Reset progress bar to start clean
+                progressBar1.Value = 0;
+
+                // Upload files one by one using array with size-based progress
+                for (int i = 0; i < allFiles.Length; i++)
+                {
+                    string currentFile = allFiles[i];
+                    
+                    // Show current file in label3
+                    string fileName = Path.GetFileName(currentFile);
+                    label3.Text = fileName;
+                    
+                    // Get file size before upload
+                    long fileSize = new FileInfo(currentFile).Length;
+                    
+                    // Calculate relative path for remote upload
+                    string relativePath = currentFile.Replace(selectedPath, "").TrimStart('\\', '/');
+                    string remoteFilePath = remotePath + "/" + relativePath.Replace('\\', '/');
+                    string remoteDir = Path.GetDirectoryName(remoteFilePath).Replace('\\', '/');
+                    
+                    // Set transfer options
+                    TransferOptions transferOptions = new TransferOptions
+                    {
+                        TransferMode = TransferMode.Binary
+                    };
+                    
+                    // Upload single file
+                    session.PutFiles(currentFile, remoteDir + "/", false, transferOptions);
+                    
+                    // Update uploaded size and progress bar based on file size
+                    uploadedSize += fileSize;
+                    int progressPercent = totalSize > 0 ? (int)((uploadedSize * 100) / totalSize) : 0;
+                    progressBar1.Value = Math.Min(progressPercent, 100);
+                    
+                    // Update progress in rich text box with size info
+                    richTextBox1.AppendText($"✓ {i + 1}/{allFiles.Length}: {fileName} ({FormatFileSize(fileSize)}) - {progressPercent}%\n");
+                    richTextBox1.ScrollToCaret();
+                }
+                
+                richTextBox1.AppendText($"Upload completed! Total uploaded: {FormatFileSize(totalSize)}\n");
+                richTextBox1.ScrollToCaret();
+                
+                // Keep progress bar at 100% to show completion
+                progressBar1.Value = 100;
+                
+                // Wait 1 second then reset progress bar to clean state
+                Task.Delay(1000).ContinueWith(t => 
+                {
+                    if (this.InvokeRequired)
+                        this.Invoke(new Action(() => progressBar1.Value = 0));
+                    else
+                        progressBar1.Value = 0;
+                });
+                
+                // Restore original full path in label3
+                label3.Text = originalPath;
+            }
+            catch (Exception ex)
+            {
+                // Reset progress bar on error
+                progressBar1.Value = 0;
+                // Restore original path in case of error
+                label3.Text = originalPath;
+                richTextBox1.AppendText($"✗ Upload failed: {ex.Message}\n");
+                richTextBox1.ScrollToCaret();
+            }
+            // ==== END NEW TEST CODE ====
         }
 
         private void button3_Click(object sender, EventArgs e)
