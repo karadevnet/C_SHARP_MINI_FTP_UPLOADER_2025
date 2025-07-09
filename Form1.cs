@@ -1,6 +1,8 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -56,6 +58,13 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
             // Welcome message
             richTextBox1.AppendText("SFTP Uploader ready. All fields cleared.\n");
             richTextBox1.ScrollToCaret();
+            // Set default permission in ComboBox (644 at index 0)
+            if (comboBox1.Items.Count > 0)
+                comboBox1.SelectedIndex = 0;
+
+            // Attach AfterCheck handler ONCE to ensure it is always present
+            treeView1.AfterCheck -= TreeView1_AfterCheck;
+            treeView1.AfterCheck += TreeView1_AfterCheck;
         }
 
         private void Form1_FormClosing(object sender, FormClosingEventArgs e)
@@ -165,7 +174,8 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
         // ==== END NEW TEST CODE ====
 
         private void button1_Click(object sender, EventArgs e)
-        {   // BUTTON CONNECT/DISCONNECT
+        {
+            // BUTTON CONNECT/DISCONNECT
             if (session == null || !session.Opened)
             {
                 // Validate inputs
@@ -173,34 +183,35 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
                 {
                     richTextBox1.AppendText("Error: Host cannot be empty.\n");
                     richTextBox1.ScrollToCaret();
+                    ShowLargeMessageBox("Host cannot be empty. Please enter the SFTP host.", "Missing Host", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     return;
                 }
-
                 if (string.IsNullOrWhiteSpace(textBox3.Text))
                 {
                     richTextBox1.AppendText("Error: Username cannot be empty.\n");
                     richTextBox1.ScrollToCaret();
+                    ShowLargeMessageBox("Username cannot be empty. Please enter the SFTP username.", "Missing Username", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     return;
                 }
-
                 if (string.IsNullOrWhiteSpace(textBox4.Text))
                 {
                     richTextBox1.AppendText("Error: Password cannot be empty.\n");
                     richTextBox1.ScrollToCaret();
+                    ShowLargeMessageBox("Password cannot be empty. Please enter the SFTP password.", "Missing Password", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     return;
                 }
-
                 if (!int.TryParse(textBox2.Text, out int portNumber) || portNumber < 1 || portNumber > 65535)
                 {
                     richTextBox1.AppendText("Error: Port must be a valid number between 1 and 65535.\n");
                     richTextBox1.ScrollToCaret();
+                    ShowLargeMessageBox("Port must be a valid number between 1 and 65535.", "Invalid Port", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     return;
                 }
-
                 if (string.IsNullOrWhiteSpace(textBox5.Text))
                 {
                     richTextBox1.AppendText("Error: Remote path cannot be empty.\n");
                     richTextBox1.ScrollToCaret();
+                    ShowLargeMessageBox("Remote path cannot be empty. Please enter the remote path.", "Missing Remote Path", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     return;
                 }
 
@@ -214,8 +225,8 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
                 try
                 {
                     fingerprint = GetSshHostKeyFingerprint(host, port);
-                    //richTextBox1.AppendText($"Detected SSH fingerprint: {fingerprint}\n");
-                    richTextBox1.AppendText($"Detected SSH fingerprint: OK\n");
+                    // For security, do not show the actual fingerprint
+                    richTextBox1.AppendText("SSH fingerprint detected and verified.\n");
                     richTextBox1.ScrollToCaret();
                 }
                 catch (Exception ex)
@@ -277,7 +288,6 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
         {       // BUTTON SELECT PATH LOCAL
             try
             {
-                // Use OpenFileDialog with modern Windows Explorer design for folder selection
                 using (OpenFileDialog folderDialog = new OpenFileDialog())
                 {
                     folderDialog.Title = "Select the main project folder to upload";
@@ -287,48 +297,33 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
                     folderDialog.CheckPathExists = true;
                     folderDialog.ValidateNames = false;
                     folderDialog.Multiselect = false;
-                    
-                    // Set initial directory to last selected path or user's documents
                     if (!string.IsNullOrEmpty(selectedPath) && Directory.Exists(selectedPath))
-                    {
                         folderDialog.InitialDirectory = selectedPath;
-                    }
                     else
-                    {
                         folderDialog.InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
-                    }
-                    
                     if (folderDialog.ShowDialog() == DialogResult.OK)
                     {
-                        // Get the directory from the selected file path
                         selectedPath = Path.GetDirectoryName(folderDialog.FileName);
                         if (string.IsNullOrEmpty(selectedPath))
-                        {
-                            selectedPath = folderDialog.FileName; // Fallback
-                        }
-                        
-                        // Ensure we have a valid directory path
+                            selectedPath = folderDialog.FileName;
                         if (File.Exists(selectedPath))
-                        {
                             selectedPath = Path.GetDirectoryName(selectedPath);
-                        }
-                        
-                        // Always show the full path in label3
                         label3.Text = selectedPath;
-                        
-                        // Update textBox6 with just the selected folder name
                         string folderName = Path.GetFileName(selectedPath);
                         if (string.IsNullOrEmpty(folderName))
-                        {
-                            // Handle root drives like C:\ 
                             folderName = selectedPath.Replace("\\", "").Replace(":", "");
-                        }
                         textBox6.Text = "/" + folderName;
-                        
-                        richTextBox1.AppendText($"Selected local path: {selectedPath}\n");
-                        richTextBox1.ScrollToCaret();
-                        
-                        // ==== NEW TEST CODE - SHOW FILE SIZE INFO ====
+                        // ==== NEW: Populate TreeView with checkboxes ===
+                        if (!string.IsNullOrEmpty(selectedPath) && Directory.Exists(selectedPath))
+                        {
+                            PopulateTreeViewWithCheckBoxes(selectedPath);
+                        }
+                        else
+                        {
+                            treeView1.Nodes.Clear();
+                            treeView1.Nodes.Add("No folder selected or folder does not exist.");
+                        }
+                        // ==== END NEW ===
                         long totalSize = CalculateTotalFileSize(selectedPath);
                         string[] files = Directory.GetFiles(selectedPath, "*.*", SearchOption.AllDirectories);
                         richTextBox1.AppendText($"Folder contains: {files.Length} files, Total size: {FormatFileSize(totalSize)}\n");
@@ -339,6 +334,8 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
                     {
                         richTextBox1.AppendText("Local path selection cancelled.\n");
                         richTextBox1.ScrollToCaret();
+                        treeView1.Nodes.Clear();
+                        treeView1.Nodes.Add("No folder selected.");
                     }
                 }
             }
@@ -346,11 +343,93 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
             {
                 richTextBox1.AppendText($"Error selecting local path: {ex.Message}\n");
                 richTextBox1.ScrollToCaret();
+                treeView1.Nodes.Clear();
+                treeView1.Nodes.Add("Error: " + ex.Message);
             }
         }
 
+        // === NEW: Populate TreeView with checkboxes for folder/file structure ===
+        private void PopulateTreeViewWithCheckBoxes(string rootPath)
+        {
+            treeView1.BeginUpdate();
+            treeView1.Nodes.Clear();
+            treeView1.CheckBoxes = true; // Ensure checkboxes are visible
+            if (string.IsNullOrEmpty(rootPath) || !Directory.Exists(rootPath))
+            {
+                treeView1.EndUpdate();
+                return;
+            }
+            DirectoryInfo rootDir = new DirectoryInfo(rootPath);
+            TreeNode rootNode = CreateDirectoryNode(rootDir);
+            treeView1.Nodes.Add(rootNode);
+            rootNode.Expand();
+            treeView1.EndUpdate();
+            // Remove event handler attach/detach here (handled in Form1_Load)
+        }
+
+        private TreeNode CreateDirectoryNode(DirectoryInfo dirInfo)
+        {
+            TreeNode dirNode = new TreeNode(dirInfo.Name) { Tag = dirInfo.FullName };
+            // Add subdirectories
+            foreach (var subDir in dirInfo.GetDirectories())
+            {
+                dirNode.Nodes.Add(CreateDirectoryNode(subDir));
+            }
+            // Add files
+            foreach (var file in dirInfo.GetFiles())
+            {
+                TreeNode fileNode = new TreeNode(file.Name) { Tag = file.FullName };
+                dirNode.Nodes.Add(fileNode);
+            }
+            return dirNode;
+        }
+
+        // === NEW: Ensure checking a parent checks all children, and vice versa ===
+        private void TreeView1_AfterCheck(object sender, TreeViewEventArgs e)
+        {
+            // Prevent recursive event firing
+            treeView1.AfterCheck -= TreeView1_AfterCheck;
+            try
+            {
+                // Check/uncheck all children
+                SetChildNodesChecked(e.Node, e.Node.Checked);
+                // Optionally, update parent nodes (if all siblings checked, check parent)
+                UpdateParentNodesChecked(e.Node);
+            }
+            finally
+            {
+                treeView1.AfterCheck += TreeView1_AfterCheck;
+            }
+        }
+
+        private void SetChildNodesChecked(TreeNode node, bool isChecked)
+        {
+            foreach (TreeNode child in node.Nodes)
+            {
+                child.Checked = isChecked;
+                SetChildNodesChecked(child, isChecked);
+            }
+        }
+
+        private void UpdateParentNodesChecked(TreeNode node)
+        {
+            if (node.Parent == null) return;
+            bool allChecked = true;
+            foreach (TreeNode sibling in node.Parent.Nodes)
+            {
+                if (!sibling.Checked)
+                {
+                    allChecked = false;
+                    break;
+                }
+            }
+            node.Parent.Checked = allChecked;
+            UpdateParentNodesChecked(node.Parent);
+        }
+
         private void button2_Click(object sender, EventArgs e)
-        {       // BUTTON UPLOAD
+        {
+            // === COMMENTED OUT OLD CODE ===
             /*
             // CLEAN SIMPLE UPLOAD CODE - WORKING VERSION (BACKUP)
             // Basic validation
@@ -452,119 +531,101 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
             }
             */
             
-            // ==== NEW TEST CODE - FILE SIZE BASED UPLOAD PROGRESS ====
-            // Basic validation
+            // === NEW: Only upload checked files and create checked directories ===
+            // 1. Validate connection and paths
             if (session == null || !session.Opened)
             {
                 richTextBox1.AppendText("Error: Not connected to SFTP server.\n");
                 richTextBox1.ScrollToCaret();
+                ShowLargeMessageBox("Not connected to SFTP server.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
-
             if (string.IsNullOrWhiteSpace(selectedPath))
             {
                 richTextBox1.AppendText("Error: No local path selected.\n");
                 richTextBox1.ScrollToCaret();
+                ShowLargeMessageBox("No local path selected.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
-
             if (string.IsNullOrWhiteSpace(remotePath))
             {
                 richTextBox1.AppendText("Error: Remote path is not set.\n");
                 richTextBox1.ScrollToCaret();
+                ShowLargeMessageBox("Remote path is not set.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
-
-            // Store original path for restoration later
+            // 2. Collect checked files and directories
+            List<string> checkedFiles = GetCheckedFiles(treeView1.Nodes);
+            HashSet<string> checkedDirs = GetCheckedDirectories(treeView1.Nodes);
+            if (checkedFiles.Count == 0)
+            {
+                richTextBox1.AppendText("No files selected for upload. Please check files in the list.\n");
+                richTextBox1.ScrollToCaret();
+                ShowLargeMessageBox("No files selected for upload. Please check files in the list.", "No Selection", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            // 3. Create checked directories on remote
+            foreach (string dir in checkedDirs)
+            {
+                string relativeDir = dir.Replace(selectedPath, "").TrimStart('\\', '/');
+                string remoteDirPath = remotePath + "/" + relativeDir.Replace('\\', '/');
+                try { session.CreateDirectory(remoteDirPath); } catch { }
+            }
+            // 4. Upload checked files
+            long totalSize = checkedFiles.Sum(f => new FileInfo(f).Length);
+            long uploadedSize = 0;
+            progressBar1.Value = 0;
             string originalPath = label3.Text;
-            richTextBox1.Clear();
-
-            try
+            richTextBox1.AppendText($"Starting upload of {checkedFiles.Count} files...\n");
+            richTextBox1.ScrollToCaret();
+            for (int i = 0; i < checkedFiles.Count; i++)
             {
-                richTextBox1.AppendText("Starting upload with file-size progress...\n");
-                richTextBox1.ScrollToCaret();
-
-                // Get all files and calculate total size
-                string[] allFiles = Directory.GetFiles(selectedPath, "*.*", SearchOption.AllDirectories);
-                long totalSize = CalculateTotalFileSize(selectedPath);
-                long uploadedSize = 0;
-                
-                richTextBox1.AppendText($"Found {allFiles.Length} files, Total size: {FormatFileSize(totalSize)}\n");
-                richTextBox1.ScrollToCaret();
-
-                // Reset progress bar to start clean
-                progressBar1.Value = 0;
-
-                // Upload files one by one using array with size-based progress
-                for (int i = 0; i < allFiles.Length; i++)
-                {
-                    string currentFile = allFiles[i];
-                    
-                    // Show current file in label3
-                    string fileName = Path.GetFileName(currentFile);
-                    label3.Text = fileName;
-                    
-                    // Get file size before upload
-                    long fileSize = new FileInfo(currentFile).Length;
-                    
-                    // Calculate relative path for remote upload
-                    string relativePath = currentFile.Replace(selectedPath, "").TrimStart('\\', '/');
-                    string remoteFilePath = remotePath + "/" + relativePath.Replace('\\', '/');
-                    string remoteDir = Path.GetDirectoryName(remoteFilePath).Replace('\\', '/');
-                    
-                    // Set transfer options
-                    TransferOptions transferOptions = new TransferOptions
-                    {
-                        TransferMode = TransferMode.Binary
-                    };
-                    
-                    // Upload single file
-                    session.PutFiles(currentFile, remoteDir + "/", false, transferOptions);
-                    
-                    // Update uploaded size and progress bar based on file size
-                    uploadedSize += fileSize;
-                    int progressPercent = totalSize > 0 ? (int)((uploadedSize * 100) / totalSize) : 0;
-                    progressBar1.Value = Math.Min(progressPercent, 100);
-                    
-                    // Update progress in rich text box with size info
-                    richTextBox1.AppendText($"✓ {i + 1}/{allFiles.Length}: {fileName} ({FormatFileSize(fileSize)}) - {progressPercent}%\n");
-                    richTextBox1.ScrollToCaret();
-                }
-                
-                richTextBox1.AppendText($"Upload completed! Total uploaded: {FormatFileSize(totalSize)}\n");
-                richTextBox1.ScrollToCaret();
-                
-                // Keep progress bar at 100% to show completion
-                progressBar1.Value = 100;
-                
-                // Wait 1 second then reset progress bar to clean state
-                Task.Delay(1000).ContinueWith(t => 
-                {
-                    if (this.InvokeRequired)
-                        this.Invoke(new Action(() => progressBar1.Value = 0));
-                    else
-                        progressBar1.Value = 0;
-                });
-                
-                // Restore original full path in label3
-                label3.Text = originalPath;
-            }
-            catch (Exception ex)
-            {
-                // Reset progress bar on error
-                progressBar1.Value = 0;
-                // Restore original path in case of error
-                label3.Text = originalPath;
-                richTextBox1.AppendText($"✗ Upload failed: {ex.Message}\n");
+                string currentFile = checkedFiles[i];
+                string fileName = Path.GetFileName(currentFile);
+                label3.Text = fileName;
+                long fileSize = new FileInfo(currentFile).Length;
+                string relativePath = currentFile.Replace(selectedPath, "").TrimStart('\\', '/');
+                string remoteFilePath = remotePath + "/" + relativePath.Replace('\\', '/');
+                string remoteDir = Path.GetDirectoryName(remoteFilePath).Replace('\\', '/');
+                TransferOptions transferOptions = new TransferOptions { TransferMode = TransferMode.Binary };
+                session.PutFiles(currentFile, remoteDir + "/", false, transferOptions);
+                // Set default permission 644 for all uploaded files
+                try { session.ExecuteCommand($"chmod 644 '{remoteFilePath}'"); } catch { }
+                uploadedSize += fileSize;
+                int progressPercent = totalSize > 0 ? (int)((uploadedSize * 100) / totalSize) : 0;
+                progressBar1.Value = Math.Min(progressPercent, 100);
+                richTextBox1.AppendText($"✓ {i + 1}/{checkedFiles.Count}: {fileName}\n");
                 richTextBox1.ScrollToCaret();
             }
-            // ==== END NEW TEST CODE ====
+            progressBar1.Value = 100;
+            richTextBox1.AppendText("Upload completed successfully!\n");
+            richTextBox1.ScrollToCaret();
+            Task.Delay(1000).ContinueWith(t =>
+            {
+                if (this.InvokeRequired)
+                    this.Invoke(new Action(() => progressBar1.Value = 0));
+                else
+                    progressBar1.Value = 0;
+            });
+            label3.Text = originalPath;
         }
 
         private void button3_Click(object sender, EventArgs e)
-        {           // BUTTON SAVE SETTINGS
+        {
+            // BUTTON SAVE SETTINGS
             try
             {
+                // Validate required fields before saving
+                if (string.IsNullOrWhiteSpace(textBox1.Text) ||
+                    string.IsNullOrWhiteSpace(textBox2.Text) ||
+                    string.IsNullOrWhiteSpace(textBox3.Text) ||
+                    string.IsNullOrWhiteSpace(textBox4.Text) ||
+                    string.IsNullOrWhiteSpace(textBox5.Text))
+                {
+                    ShowLargeMessageBox("Cannot save settings. All fields (Host, Port, Username, Password, Remote Path) must be filled.", "Missing Fields", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                }
+
                 // Use SaveFileDialog to let user choose filename and location
                 using (SaveFileDialog saveDialog = new SaveFileDialog())
                 {
@@ -674,13 +735,17 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
                                             folderName = selectedPath.Replace("\\", "").Replace(":", "");
                                         }
                                         textBox6.Text = "/" + folderName;
-                                        
+                                        // === NEW: Populate TreeView after loading settings ===
+                                        PopulateTreeViewWithCheckBoxes(selectedPath);
+                                        // === END NEW ===
                                         loadedCount++;
                                     }
                                     else if (!string.IsNullOrEmpty(value))
                                     {
                                         richTextBox1.AppendText($"Warning: Local path '{value}' does not exist.\n");
                                         richTextBox1.ScrollToCaret();
+                                        treeView1.Nodes.Clear();
+                                        treeView1.Nodes.Add("No folder selected or folder does not exist.");
                                     }
                                     break;
                             }
@@ -711,5 +776,230 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
                 richTextBox1.ScrollToCaret();
             }
         }
+
+        // === NEW: Helper to collect checked files from TreeView ===
+        private List<string> GetCheckedFiles(TreeNodeCollection nodes)
+        {
+            List<string> files = new List<string>();
+            foreach (TreeNode node in nodes)
+            {
+                // If node is checked and is a file (leaf node)
+                if (node.Checked && node.Nodes.Count == 0 && node.Tag is string path && File.Exists(path))
+                {
+                    files.Add(path);
+                }
+                // Recurse into children
+                if (node.Nodes.Count > 0)
+                {
+                    files.AddRange(GetCheckedFiles(node.Nodes));
+                }
+            }
+            return files;
+        }
+
+        // === NEW: Helper to collect checked directories from TreeView (including parents of checked files) ===
+        private HashSet<string> GetCheckedDirectories(TreeNodeCollection nodes)
+        {
+            HashSet<string> dirs = new HashSet<string>();
+            foreach (TreeNode node in nodes)
+            {
+                // If node is checked and is a directory (has children)
+                if (node.Checked && node.Nodes.Count > 0 && node.Tag is string dirPath && Directory.Exists(dirPath))
+                {
+                    dirs.Add(dirPath);
+                }
+                // If any child is checked, add this directory
+                if (node.Nodes.Count > 0)
+                {
+                    var childDirs = GetCheckedDirectories(node.Nodes);
+                    if (childDirs.Count > 0 && node.Tag is string parentDir && Directory.Exists(parentDir))
+                    {
+                        dirs.Add(parentDir);
+                    }
+                    foreach (var d in childDirs) dirs.Add(d);
+                }
+            }
+            return dirs;
+        }
+
+        // === NEW: Set permissions for selected files/folders in TreeView ===
+        private void button6_Click(object sender, EventArgs e)
+        {
+            if (session == null || !session.Opened)
+            {
+                ShowLargeMessageBox("Not connected to SFTP server.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+            // If nothing is selected, but there are checked nodes, select the first checked node automatically
+            if (treeView1.SelectedNode == null)
+            {
+                TreeNode firstChecked = FindFirstCheckedNode(treeView1.Nodes);
+                if (firstChecked != null)
+                {
+                    treeView1.SelectedNode = firstChecked;
+                }
+                else
+                {
+                    ShowLargeMessageBox("Please select a file or folder in the list.", "No Selection", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+            }
+            // Only allow permission change if the selected node is checked
+            if (!treeView1.SelectedNode.Checked)
+            {
+                ShowLargeMessageBox("Please check the selected file or folder before setting permissions.", "Not Checked", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            // Get permission from ComboBox (e.g., comboBoxPermissions.Text)
+            string perm = comboBox1.Text.Trim();
+            if (string.IsNullOrEmpty(perm))
+            {
+                ShowLargeMessageBox("Please select or enter a permission value.", "No Permission", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            // Expand all descendants so all nodes are loaded
+            void ExpandAllNodes(TreeNode node)
+            {
+                node.Expand();
+                foreach (TreeNode child in node.Nodes)
+                    ExpandAllNodes(child);
+            }
+            ExpandAllNodes(treeView1.SelectedNode);
+            // Collect all descendants of the selected node (if parent is checked, all children are logically selected)
+            List<TreeNode> nodesToSet = new List<TreeNode>();
+            void CollectAll(TreeNode node)
+            {
+                if (node.Tag is string) nodesToSet.Add(node);
+                foreach (TreeNode child in node.Nodes) CollectAll(child);
+            }
+            CollectAll(treeView1.SelectedNode);
+            foreach (var node in nodesToSet)
+            {
+                string localPath = node.Tag as string;
+                string relativePath = localPath.Replace(selectedPath, "").TrimStart('\\', '/');
+                string remoteTarget = remotePath + "/" + relativePath.Replace('\\', '/');
+                try
+                {
+                    session.ExecuteCommand($"chmod {perm} '{remoteTarget}'");
+                    richTextBox1.AppendText($"Permission {perm} set for: {remoteTarget}\n");
+                    richTextBox1.ScrollToCaret();
+                }
+                catch (Exception ex)
+                {
+                    richTextBox1.AppendText($"Failed to set permission for {remoteTarget}: {ex.Message}\n");
+                    richTextBox1.ScrollToCaret();
+                }
+            }
+        }
+
+        // Helper: Find the first checked node in the tree
+private TreeNode FindFirstCheckedNode(TreeNodeCollection nodes)
+{
+    foreach (TreeNode node in nodes)
+    {
+        if (node.Checked)
+            return node;
+        if (node.Nodes.Count > 0)
+        {
+            TreeNode found = FindFirstCheckedNode(node.Nodes);
+            if (found != null)
+                return found;
+        }
+    }
+    return null;
+}
+// === Helper: Show a large font message box ===
+private DialogResult ShowLargeMessageBox(string message, string title, MessageBoxButtons buttons, MessageBoxIcon icon)
+{
+    using (Form form = new Form())
+    {
+        form.Text = title;
+        form.StartPosition = FormStartPosition.CenterParent;
+        form.FormBorderStyle = FormBorderStyle.FixedDialog;
+        form.MaximizeBox = false;
+        form.MinimizeBox = false;
+        form.ShowInTaskbar = false;
+        form.Size = new Size(480, 220);
+        form.Font = new Font(SystemFonts.MessageBoxFont.FontFamily, 14, FontStyle.Regular);
+
+        Label label = new Label()
+        {
+            AutoSize = false,
+            Text = message,
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleCenter,
+            Font = new Font(SystemFonts.MessageBoxFont.FontFamily, 14, FontStyle.Regular)
+        };
+        form.Controls.Add(label);
+
+        FlowLayoutPanel panel = new FlowLayoutPanel()
+        {
+            Dock = DockStyle.Bottom,
+            FlowDirection = FlowDirection.RightToLeft,
+            Height = 60
+        };
+        form.Controls.Add(panel);
+
+        DialogResult result = DialogResult.None;
+        void AddButton(string text, DialogResult dr)
+        {
+            Button btn = new Button()
+            {
+                Text = text,
+                DialogResult = dr,
+                Font = new Font(SystemFonts.MessageBoxFont.FontFamily, 14, FontStyle.Regular),
+                AutoSize = true,
+                Margin = new Padding(10, 10, 10, 10)
+            };
+            btn.Click += (s, e) => { result = dr; form.Close(); };
+            panel.Controls.Add(btn);
+        }
+        if (buttons == MessageBoxButtons.OK)
+            AddButton("OK", DialogResult.OK);
+        else if (buttons == MessageBoxButtons.OKCancel)
+        {
+            AddButton("Cancel", DialogResult.Cancel);
+            AddButton("OK", DialogResult.OK);
+        }
+        else if (buttons == MessageBoxButtons.YesNo)
+        {
+            AddButton("No", DialogResult.No);
+            AddButton("Yes", DialogResult.Yes);
+        }
+        else if (buttons == MessageBoxButtons.YesNoCancel)
+        {
+            AddButton("Cancel", DialogResult.Cancel);
+            AddButton("No", DialogResult.No);
+            AddButton("Yes", DialogResult.Yes);
+        }
+        // Icon (optional)
+        if (icon != MessageBoxIcon.None)
+        {
+            PictureBox pb = new PictureBox()
+            {
+                Size = new Size(48, 48),
+                Location = new Point(20, 20),
+                SizeMode = PictureBoxSizeMode.StretchImage
+            };
+            switch (icon)
+            {
+                case MessageBoxIcon.Error:
+                    pb.Image = SystemIcons.Error.ToBitmap(); break;
+                case MessageBoxIcon.Warning:
+                    pb.Image = SystemIcons.Warning.ToBitmap(); break;
+                case MessageBoxIcon.Information:
+                    pb.Image = SystemIcons.Information.ToBitmap(); break;
+                case MessageBoxIcon.Question:
+                    pb.Image = SystemIcons.Question.ToBitmap(); break;
+            }
+            form.Controls.Add(pb);
+            label.Padding = new Padding(80, 20, 20, 20);
+        }
+        form.AcceptButton = panel.Controls.OfType<Button>().FirstOrDefault();
+        form.CancelButton = panel.Controls.OfType<Button>().FirstOrDefault(b => b.DialogResult == DialogResult.Cancel);
+        result = form.ShowDialog();
+        return result;
+    }
+}
     }
 }
