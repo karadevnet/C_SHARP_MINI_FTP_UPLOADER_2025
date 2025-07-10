@@ -26,6 +26,9 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
         public Form1()
         {
             InitializeComponent();
+            // Attach expand/collapse handlers
+            treeView1.AfterExpand += TreeView1_AfterExpand;
+            treeView1.AfterCollapse += TreeView1_AfterCollapse;
         }
 
         private void Form1_Load(object sender, EventArgs e)
@@ -395,6 +398,8 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
                 SetChildNodesChecked(e.Node, e.Node.Checked);
                 // Optionally, update parent nodes (if all siblings checked, check parent)
                 UpdateParentNodesChecked(e.Node);
+                // Select the node that was just checked/unchecked
+                treeView1.SelectedNode = e.Node;
             }
             finally
             {
@@ -429,6 +434,18 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
 
         private void button2_Click(object sender, EventArgs e)
         {
+            // === NEW: Always refresh TreeView if folder structure changed ===
+            RefreshTreeViewIfChanged();
+            // === NEW: Mirror delete remote files/folders not present locally ===
+            try
+            {
+                MirrorDeleteRemoteExtra(session, selectedPath, remotePath);
+            }
+            catch (Exception ex)
+            {
+                richTextBox1.AppendText($"Mirror delete failed: {ex.Message}\n");
+            }
+
             // === COMMENTED OUT OLD CODE ===
             /*
             // CLEAN SIMPLE UPLOAD CODE - WORKING VERSION (BACKUP)
@@ -1001,5 +1018,156 @@ private DialogResult ShowLargeMessageBox(string message, string title, MessageBo
         return result;
     }
 }
+        // === NEW: Refresh TreeView if folder structure changed ===
+        private void RefreshTreeViewIfChanged()
+        {
+            if (string.IsNullOrEmpty(selectedPath) || !Directory.Exists(selectedPath))
+                return;
+
+            // Helper: Recursively get all relative paths from disk
+            List<string> GetAllDiskPaths(string root)
+            {
+                var all = new List<string>();
+                foreach (var dir in Directory.GetDirectories(root, "*", SearchOption.AllDirectories))
+                    all.Add(dir.Substring(selectedPath.Length).TrimStart(Path.DirectorySeparatorChar));
+                foreach (var file in Directory.GetFiles(root, "*", SearchOption.AllDirectories))
+                    all.Add(file.Substring(selectedPath.Length).TrimStart(Path.DirectorySeparatorChar));
+                return all;
+            }
+            // Helper: Recursively get all relative paths from TreeView
+            List<string> GetAllTreePaths(TreeNodeCollection nodes)
+            {
+                var all = new List<string>();
+                foreach (TreeNode node in nodes)
+                {
+                    if (node.Tag is string path && path.StartsWith(selectedPath))
+                        all.Add(path.Substring(selectedPath.Length).TrimStart(Path.DirectorySeparatorChar));
+                    if (node.Nodes.Count > 0)
+                        all.AddRange(GetAllTreePaths(node.Nodes));
+                }
+                return all;
+            }
+            var diskPaths = GetAllDiskPaths(selectedPath);
+            var treePaths = GetAllTreePaths(treeView1.Nodes);
+            diskPaths.Sort();
+            treePaths.Sort();
+            if (!diskPaths.SequenceEqual(treePaths))
+            {
+                // Save checked states
+                var checkedSet = new HashSet<string>(GetCheckedFiles(treeView1.Nodes).Concat(GetCheckedDirectories(treeView1.Nodes)));
+                PopulateTreeViewWithCheckBoxes(selectedPath);
+                // Restore checked states
+                void RestoreChecked(TreeNodeCollection nodes)
+                {
+                    foreach (TreeNode node in nodes)
+                    {
+                        if (node.Tag is string path && checkedSet.Contains(path))
+                            node.Checked = true;
+                        if (node.Nodes.Count > 0)
+                            RestoreChecked(node.Nodes);
+                    }
+                }
+                RestoreChecked(treeView1.Nodes);
+                // Show short message in label3 instead of expanding all nodes or showing a message box
+                label3.Text = "Tree updated, review new files/folders.";
+            }
+        }
+
+        private void MirrorDeleteRemoteExtra(Session session, string localRoot, string remoteRoot)
+        {
+            // Get all local relative paths
+            var localDirs = new HashSet<string>(Directory.GetDirectories(localRoot, "*", SearchOption.AllDirectories)
+                .Select(d => d.Substring(localRoot.Length).TrimStart(Path.DirectorySeparatorChar).Replace('\\', '/')));
+            var localFiles = new HashSet<string>(Directory.GetFiles(localRoot, "*", SearchOption.AllDirectories)
+                .Select(f => f.Substring(localRoot.Length).TrimStart(Path.DirectorySeparatorChar).Replace('\\', '/')));
+
+            // List all remote files and directories recursively
+            RemoteDirectoryInfo remoteListing = session.ListDirectory(remoteRoot);
+            var remoteDirs = new List<string>();
+            var remoteFiles = new List<string>();
+            void CollectRemote(RemoteDirectoryInfo dir, string relPath)
+            {
+                foreach (var sub in dir.Files.Where(f => f.IsDirectory && f.Name != "." && f.Name != ".."))
+                {
+                    string subRel = string.IsNullOrEmpty(relPath) ? sub.Name : relPath + "/" + sub.Name;
+                    remoteDirs.Add(subRel);
+                    CollectRemote(session.ListDirectory(remoteRoot + "/" + subRel), subRel);
+                }
+                foreach (var file in dir.Files.Where(f => !f.IsDirectory))
+                {
+                    string fileRel = string.IsNullOrEmpty(relPath) ? file.Name : relPath + "/" + file.Name;
+                    remoteFiles.Add(fileRel);
+                }
+            }
+            CollectRemote(remoteListing, "");
+
+            // Delete remote files not in local
+            foreach (var remoteFile in remoteFiles)
+            {
+                if (!localFiles.Contains(remoteFile.Replace('/', Path.DirectorySeparatorChar)))
+                {
+                    try
+                    {
+                        session.RemoveFiles(remoteRoot + "/" + remoteFile);
+                        richTextBox1.AppendText($"Deleted remote file: {remoteFile}\n");
+                    }
+                    catch (Exception ex)
+                    {
+                        richTextBox1.AppendText($"Failed to delete remote file {remoteFile}: {ex.Message}\n");
+                    }
+                }
+            }
+            // Delete remote directories not in local (reverse order for safe delete)
+            foreach (var remoteDir in remoteDirs.OrderByDescending(s => s.Length))
+            {
+                if (!localDirs.Contains(remoteDir.Replace('/', Path.DirectorySeparatorChar)))
+                {
+                    try
+                    {
+                        session.RemoveFiles(remoteRoot + "/" + remoteDir + "/");
+                        richTextBox1.AppendText($"Deleted remote folder: {remoteDir}\n");
+                    }
+                    catch (Exception ex)
+                    {
+                        richTextBox1.AppendText($"Failed to delete remote folder {remoteDir}: {ex.Message}\n");
+                    }
+                }
+            }
+        }
+
+        // Highlight expanded node by selecting it
+        private void TreeView1_AfterExpand(object sender, TreeViewEventArgs e)
+        {
+            treeView1.SelectedNode = e.Node;
+        }
+        // Remove highlight when collapsed (optional: do nothing, or select parent)
+        private void TreeView1_AfterCollapse(object sender, TreeViewEventArgs e)
+        {
+            // Optionally, select parent node when collapsed
+            if (e.Node.Parent != null)
+                treeView1.SelectedNode = e.Node.Parent;
+        }
+        
+        /*
+        // Select node when its checkbox is clicked
+        private void TreeView1_AfterCheck(object sender, TreeViewEventArgs e)
+        {
+            // Prevent recursive event firing
+            treeView1.AfterCheck -= TreeView1_AfterCheck;
+            try
+            {
+                // Check/uncheck all children
+                SetChildNodesChecked(e.Node, e.Node.Checked);
+                // Optionally, update parent nodes (if all siblings checked, check parent)
+                UpdateParentNodesChecked(e.Node);
+                // Select the node that was just checked/unchecked
+                treeView1.SelectedNode = e.Node;
+            }
+            finally
+            {
+                treeView1.AfterCheck += TreeView1_AfterCheck;
+            }
+        }
+        */
     }
 }
