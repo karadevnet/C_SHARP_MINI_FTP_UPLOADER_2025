@@ -7,6 +7,7 @@ using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using WinSCP;
+using C_SHARP_MNI_FTP_UPLOADER_2025;
 
 namespace C_SHARP_MNI_FTP_UPLOADER_2025
 {
@@ -14,6 +15,9 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
     public partial class Form1 : Form
     {
         Session session = new WinSCP.Session();
+
+        // New: RichTextBox for differences
+        private RichTextBox richTextBoxDifferences;
 
         string selectedPath = string.Empty;
         string host = string.Empty;
@@ -29,6 +33,8 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
             // Attach expand/collapse handlers
             treeView1.AfterExpand += TreeView1_AfterExpand;
             treeView1.AfterCollapse += TreeView1_AfterCollapse;
+
+            // Removed: RichTextBox for differences (now in dialog)
         }
 
         private void Form1_Load(object sender, EventArgs e)
@@ -264,6 +270,21 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
                     richTextBox1.ScrollToCaret();
                     button1.Text = "CONNECTED";
                     button1.BackColor = Color.Lime;
+                    // Change Load Settings button to FOLDER REFRESH
+                    button5.Text = "FOLDER REFRESH";
+
+                    // === NEW: Compare local and remote folder structure ===
+                    bool structureIsSame = CompareLocalAndRemoteStructure(selectedPath, remotePath);
+                    if (structureIsSame)
+                    {
+                        richTextBox1.AppendText("Local and remote folder structures are the SAME.\n");
+                    }
+                    else
+                    {
+                        richTextBox1.AppendText("Local and remote folder structures are DIFFERENT.\n");
+                    }
+                    richTextBox1.ScrollToCaret();
+                    // === END NEW ===
                 }
                 catch (Exception ex)
                 {
@@ -284,7 +305,110 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
                 richTextBox1.ScrollToCaret();
                 button1.Text = "DISCONNECTED";
                 button1.BackColor = System.Drawing.SystemColors.ButtonFace;
+                // Revert FOLDER REFRESH button to Load Settings
+                //button5.Text = "Load Settings";
             }
+        } // end of button1_Click CONNECT / DISCONNECT
+
+        private void button2_Click(object sender, EventArgs e)
+        {
+            richTextBox1.Clear();
+            // Always refresh TreeView to show latest local folder structure
+            //PopulateTreeViewWithCheckBoxes(selectedPath);
+            // === NEW: Mirror delete remote files/folders not present locally ===
+            try
+            {
+                MirrorDeleteRemoteExtra(session, selectedPath, remotePath); // ADD TO WORK FOR NEW DIRS
+            }
+            catch (Exception ex)
+            {
+                richTextBox1.AppendText($"Mirror delete failed: {ex.Message}\n");
+            }
+
+            // === NEW: Only upload checked files and create checked directories ===
+            // 1. Validate connection and paths
+            if (session == null || !session.Opened)
+            {
+                richTextBox1.AppendText("Error: Not connected to SFTP server.\n");
+                richTextBox1.ScrollToCaret();
+                ShowLargeMessageBox("Not connected to SFTP server.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+            if (string.IsNullOrWhiteSpace(selectedPath))
+            {
+                richTextBox1.AppendText("Error: No local path selected.\n");
+                richTextBox1.ScrollToCaret();
+                ShowLargeMessageBox("No local path selected.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+            if (string.IsNullOrWhiteSpace(remotePath))
+            {
+                richTextBox1.AppendText("Error: Remote path is not set.\n");
+                richTextBox1.ScrollToCaret();
+                ShowLargeMessageBox("Remote path is not set.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+            // 2. Collect checked files and directories
+            List<string> checkedFiles = GetCheckedFiles(treeView1.Nodes);
+            HashSet<string> checkedDirs = GetCheckedDirectories(treeView1.Nodes);
+            if (checkedFiles.Count == 0 && checkedDirs.Count == 0)
+            {
+                richTextBox1.AppendText("No files or folders selected for upload. Please check files or folders in the list.\n");
+                richTextBox1.ScrollToCaret();
+                ShowLargeMessageBox("No files or folders selected for upload. Please check files or folders in the list.", "No Selection", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            // 3. Create checked directories on remote
+            foreach (string dir in checkedDirs)
+            {
+                string relativeDir = dir.Replace(selectedPath, "").TrimStart('\\', '/');
+                string remoteDirPath = remotePath + "/" + relativeDir.Replace('\\', '/');
+                try { session.CreateDirectory(remoteDirPath); } catch { }
+            }
+            // 4. Upload checked files
+            long totalSize = checkedFiles.Sum(f => new FileInfo(f).Length);
+            long uploadedSize = 0;
+            progressBar1.Value = 0;
+            string originalPath = label3.Text;
+            richTextBox1.AppendText($"Starting upload of {checkedFiles.Count} files...\n");
+            richTextBox1.ScrollToCaret();
+            for (int i = 0; i < checkedFiles.Count; i++)
+            {
+                string currentFile = checkedFiles[i];
+                string fileName = Path.GetFileName(currentFile);
+                label3.Text = fileName;
+                long fileSize = new FileInfo(currentFile).Length;
+                string relativePath = currentFile.Replace(selectedPath, "").TrimStart('\\', '/');
+                string remoteFilePath = remotePath + "/" + relativePath.Replace('\\', '/');
+                string remoteDir = Path.GetDirectoryName(remoteFilePath).Replace('\\', '/');
+                TransferOptions transferOptions = new TransferOptions { TransferMode = TransferMode.Binary };
+                session.PutFiles(currentFile, remoteDir + "/", false, transferOptions);
+                // Set default permission 644 for all uploaded files
+                try { session.ExecuteCommand($"chmod 644 '{remoteFilePath}'"); } catch { }
+                uploadedSize += fileSize;
+                int progressPercent = totalSize > 0 ? (int)((uploadedSize * 100) / totalSize) : 0;
+                progressBar1.Value = Math.Min(progressPercent, 100);
+                richTextBox1.AppendText($"✓ {i + 1}/{checkedFiles.Count}: {fileName}\n");
+                richTextBox1.ScrollToCaret();
+            }
+            progressBar1.Value = 100;
+            richTextBox1.AppendText("Upload completed successfully!\n");
+            richTextBox1.ScrollToCaret();
+            Task.Delay(1000).ContinueWith(t =>
+            {
+                if (this.InvokeRequired)
+                    this.Invoke(new Action(() => progressBar1.Value = 0));
+                else
+                    progressBar1.Value = 0;
+            });
+            label3.Text = originalPath;
+            // Refresh TreeView to reflect any local deletions
+           // PopulateTreeViewWithCheckBoxes(selectedPath);
+        }
+
+        private void button3_Click(object sender, EventArgs e)
+        {
+            // Cleared as requested
         }
 
         private void button4_Click(object sender, EventArgs e)
@@ -351,10 +475,128 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
             }
         }
 
+        private void MirrorDeleteRemoteExtra(Session session, string localRoot, string remoteRoot)
+        {
+            // Get all local relative paths
+            var localDirs = new HashSet<string>(Directory.GetDirectories(localRoot, "*", SearchOption.AllDirectories)
+                .Select(d => d.Substring(localRoot.Length).TrimStart(Path.DirectorySeparatorChar).Replace("\\", "/")));
+            var localFiles = new HashSet<string>(Directory.GetFiles(localRoot, "*", SearchOption.AllDirectories)
+                .Select(f => f.Substring(localRoot.Length).TrimStart(Path.DirectorySeparatorChar).Replace("\\", "/")));
+
+            // List all remote files and directories recursively
+            RemoteDirectoryInfo remoteListing = session.ListDirectory(remoteRoot);
+            var remoteDirs = new List<string>();
+            var remoteFiles = new List<string>();
+            void CollectRemote(RemoteDirectoryInfo dir, string relPath)
+            {
+                foreach (RemoteFileInfo sub in dir.Files.Where(f => f.IsDirectory && f.Name != "." && f.Name != ".."))
+                {
+                    string subRel = string.IsNullOrEmpty(relPath) ? sub.Name : relPath + "/" + sub.Name;
+                    remoteDirs.Add(subRel);
+                    CollectRemote(session.ListDirectory(remoteRoot + "/" + subRel), subRel);
+                }
+                foreach (RemoteFileInfo file in dir.Files.Where(f => !f.IsDirectory))
+                {
+                    string fileRel = string.IsNullOrEmpty(relPath) ? file.Name : relPath + "/" + file.Name;
+                    remoteFiles.Add(fileRel);
+                }
+            }
+            CollectRemote(remoteListing, "");
+
+            // Delete remote files not in local
+            foreach (string remoteFile in remoteFiles)
+            {
+                if (!localFiles.Contains(remoteFile))
+                {
+                    try
+                    {
+                        session.RemoveFiles(remoteRoot + "/" + remoteFile);
+                        richTextBox1.AppendText($"Deleted remote file: {remoteFile}\n");
+                    }
+                    catch (Exception ex)
+                    {
+                        richTextBox1.AppendText($"Failed to delete remote file {remoteFile}: {ex.Message}\n");
+                    }
+                }
+            }
+            // Delete remote directories not in local (reverse order for safe delete)
+            foreach (string remoteDir in remoteDirs.OrderByDescending(s => s.Length))
+            {
+                if (!localDirs.Contains(remoteDir))
+                {
+                    try
+                    {
+                        session.RemoveFiles(remoteRoot + "/" + remoteDir + "/");
+                        richTextBox1.AppendText($"Deleted remote folder: {remoteDir}\n");
+                    }
+                    catch (Exception ex)
+                    {
+                        richTextBox1.AppendText($"Failed to delete remote folder {remoteDir}: {ex.Message}\n");
+                    }
+                }
+            }
+            // Create new directories on remote that exist locally but not remotely
+            /*
+            foreach (string localDir in localDirs)
+            {
+                if (!remoteDirs.Contains(localDir))
+                {
+                    try
+                    {
+                        session.CreateDirectory(remoteRoot + "/" + localDir);
+                        richTextBox1.AppendText($"Created remote folder: {localDir}\n");
+                    }
+                    catch (Exception ex)
+                    {
+                        richTextBox1.AppendText($"Failed to create remote folder {localDir}: {ex.Message}\n");
+                    }
+                }
+            }
+            // Upload new files to remote that exist locally but not remotely
+            foreach (string localFile in localFiles)
+            {
+                if (!remoteFiles.Contains(localFile))
+                {
+                    try
+                    {
+                        string localFilePath = Path.Combine(localRoot, localFile.Replace('/', Path.DirectorySeparatorChar));
+                        string remoteFilePath = remoteRoot + "/" + localFile;
+                        string remoteDir = Path.GetDirectoryName(remoteFilePath).Replace("\\", "/");
+                        TransferOptions transferOptions = new TransferOptions { TransferMode = TransferMode.Binary };
+                        session.PutFiles(localFilePath, remoteDir + "/", false, transferOptions);
+                        richTextBox1.AppendText($"Uploaded new file: {localFile}\n");
+                    }
+                    catch (Exception ex)
+                    {
+                        richTextBox1.AppendText($"Failed to upload new file {localFile}: {ex.Message}\n");
+                    }
+                }
+            }
+            */
+        }
+
+
+
         // === NEW: Populate TreeView with checkboxes for folder/file structure ===
         private void PopulateTreeViewWithCheckBoxes(string rootPath)
         {
             treeView1.BeginUpdate();
+            // === Preserve checked states and selected node ===
+            // 1. Collect checked paths and selected path
+            var checkedPaths = new HashSet<string>();
+            void CollectChecked(TreeNodeCollection nodes)
+            {
+                foreach (TreeNode node in nodes)
+                {
+                    if (node.Checked && node.Tag is string path)
+                        checkedPaths.Add(path);
+                    if (node.Nodes.Count > 0)
+                        CollectChecked(node.Nodes);
+                }
+            }
+            CollectChecked(treeView1.Nodes);
+            string selectedNodePath = treeView1.SelectedNode != null && treeView1.SelectedNode.Tag is string selPath ? selPath : null;
+
             treeView1.Nodes.Clear();
             treeView1.CheckBoxes = true; // Ensure checkboxes are visible
             if (string.IsNullOrEmpty(rootPath) || !Directory.Exists(rootPath))
@@ -363,25 +605,41 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
                 return;
             }
             DirectoryInfo rootDir = new DirectoryInfo(rootPath);
-            TreeNode rootNode = CreateDirectoryNode(rootDir);
+            TreeNode rootNode = CreateDirectoryNodeWithRestore(rootDir, checkedPaths, selectedNodePath, out TreeNode restoredSelectedNode);
             treeView1.Nodes.Add(rootNode);
             rootNode.Expand();
+            // Restore selected node if found
+            if (restoredSelectedNode != null)
+                treeView1.SelectedNode = restoredSelectedNode;
             treeView1.EndUpdate();
             // Remove event handler attach/detach here (handled in Form1_Load)
         }
 
-        private TreeNode CreateDirectoryNode(DirectoryInfo dirInfo)
+        // New version: restores checked state and selected node
+        private TreeNode CreateDirectoryNodeWithRestore(DirectoryInfo dirInfo, HashSet<string> checkedPaths, string selectedNodePath, out TreeNode selectedNode)
         {
             TreeNode dirNode = new TreeNode(dirInfo.Name) { Tag = dirInfo.FullName };
+            if (checkedPaths.Contains(dirInfo.FullName))
+                dirNode.Checked = true;
+            selectedNode = null;
+            if (selectedNodePath == dirInfo.FullName)
+                selectedNode = dirNode;
             // Add subdirectories
             foreach (var subDir in dirInfo.GetDirectories())
             {
-                dirNode.Nodes.Add(CreateDirectoryNode(subDir));
+                TreeNode childNode = CreateDirectoryNodeWithRestore(subDir, checkedPaths, selectedNodePath, out TreeNode foundSel);
+                dirNode.Nodes.Add(childNode);
+                if (foundSel != null)
+                    selectedNode = foundSel;
             }
             // Add files
             foreach (var file in dirInfo.GetFiles())
             {
                 TreeNode fileNode = new TreeNode(file.Name) { Tag = file.FullName };
+                if (checkedPaths.Contains(file.FullName))
+                    fileNode.Checked = true;
+                if (selectedNodePath == file.FullName)
+                    selectedNode = fileNode;
                 dirNode.Nodes.Add(fileNode);
             }
             return dirNode;
@@ -432,259 +690,161 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
             UpdateParentNodesChecked(node.Parent);
         }
 
-        private void button2_Click(object sender, EventArgs e)
-        {
-            // === NEW: Always refresh TreeView if folder structure changed ===
-            RefreshTreeViewIfChanged();
-            // === NEW: Mirror delete remote files/folders not present locally ===
-            try
-            {
-                MirrorDeleteRemoteExtra(session, selectedPath, remotePath);
-            }
-            catch (Exception ex)
-            {
-                richTextBox1.AppendText($"Mirror delete failed: {ex.Message}\n");
-            }
-
-            // === COMMENTED OUT OLD CODE ===
-            /*
-            // CLEAN SIMPLE UPLOAD CODE - WORKING VERSION (BACKUP)
-            // Basic validation
-            if (session == null || !session.Opened)
-            {
-                richTextBox1.AppendText("Error: Not connected to SFTP server.\n");
-                richTextBox1.ScrollToCaret();
-                return;
-            }
-
-            if (string.IsNullOrWhiteSpace(selectedPath))
-            {
-                richTextBox1.AppendText("Error: No local path selected.\n");
-                richTextBox1.ScrollToCaret();
-                return;
-            }
-
-            if (string.IsNullOrWhiteSpace(remotePath))
-            {
-                richTextBox1.AppendText("Error: Remote path is not set.\n");
-                richTextBox1.ScrollToCaret();
-                return;
-            }
-
-            // Store original path for restoration later
-            string originalPath = label3.Text;
-
-            try
-            {
-                richTextBox1.AppendText("Starting upload...\n");
-                richTextBox1.ScrollToCaret();
-
-                // Get all files from selected folder using array
-                string[] allFiles = Directory.GetFiles(selectedPath, "*.*", SearchOption.AllDirectories);
-                
-                richTextBox1.AppendText($"Found {allFiles.Length} files to upload\n");
-                richTextBox1.ScrollToCaret();
-
-                // Reset progress bar to start clean
-                progressBar1.Value = 0;
-
-                // Upload files one by one using array
-                for (int i = 0; i < allFiles.Length; i++)
-                {
-                    string currentFile = allFiles[i];
-                    
-                    // Show current file in label3
-                    string fileName = Path.GetFileName(currentFile);
-                    label3.Text = fileName;
-                    
-                    // Calculate relative path for remote upload
-                    string relativePath = currentFile.Replace(selectedPath, "").TrimStart('\\', '/');
-                    string remoteFilePath = remotePath + "/" + relativePath.Replace('\\', '/');
-                    string remoteDir = Path.GetDirectoryName(remoteFilePath).Replace('\\', '/');
-                    
-                    // Set transfer options
-                    TransferOptions transferOptions = new TransferOptions
-                    {
-                        TransferMode = TransferMode.Binary
-                    };
-                    
-                    // Upload single file
-                    session.PutFiles(currentFile, remoteDir + "/", false, transferOptions);
-                    
-                    // Update progress bar - simple calculation
-                    progressBar1.Value = (i + 1) * 100 / allFiles.Length;
-                    
-                    // Update progress in rich text box
-                    richTextBox1.AppendText($"✓ {i + 1}/{allFiles.Length}: {fileName}\n");
-                    richTextBox1.ScrollToCaret();
-                }
-                
-                richTextBox1.AppendText("Upload completed successfully!\n");
-                richTextBox1.ScrollToCaret();
-                
-                // Keep progress bar at 100% to show completion
-                progressBar1.Value = 100;
-                
-                // Wait 1 second then reset progress bar to clean state
-                Task.Delay(1000).ContinueWith(t => 
-                {
-                    if (this.InvokeRequired)
-                        this.Invoke(new Action(() => progressBar1.Value = 0));
-                    else
-                        progressBar1.Value = 0;
-                });
-                
-                // Restore original full path in label3
-                label3.Text = originalPath;
-            }
-            catch (Exception ex)
-            {
-                // Reset progress bar on error
-                progressBar1.Value = 0;
-                // Restore original path in case of error
-                label3.Text = originalPath;
-                richTextBox1.AppendText($"✗ Upload failed: {ex.Message}\n");
-                richTextBox1.ScrollToCaret();
-            }
-            */
-            
-            // === NEW: Only upload checked files and create checked directories ===
-            // 1. Validate connection and paths
-            if (session == null || !session.Opened)
-            {
-                richTextBox1.AppendText("Error: Not connected to SFTP server.\n");
-                richTextBox1.ScrollToCaret();
-                ShowLargeMessageBox("Not connected to SFTP server.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
-            }
-            if (string.IsNullOrWhiteSpace(selectedPath))
-            {
-                richTextBox1.AppendText("Error: No local path selected.\n");
-                richTextBox1.ScrollToCaret();
-                ShowLargeMessageBox("No local path selected.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
-            }
-            if (string.IsNullOrWhiteSpace(remotePath))
-            {
-                richTextBox1.AppendText("Error: Remote path is not set.\n");
-                richTextBox1.ScrollToCaret();
-                ShowLargeMessageBox("Remote path is not set.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
-            }
-            // 2. Collect checked files and directories
-            List<string> checkedFiles = GetCheckedFiles(treeView1.Nodes);
-            HashSet<string> checkedDirs = GetCheckedDirectories(treeView1.Nodes);
-            if (checkedFiles.Count == 0)
-            {
-                richTextBox1.AppendText("No files selected for upload. Please check files in the list.\n");
-                richTextBox1.ScrollToCaret();
-                ShowLargeMessageBox("No files selected for upload. Please check files in the list.", "No Selection", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-            // 3. Create checked directories on remote
-            foreach (string dir in checkedDirs)
-            {
-                string relativeDir = dir.Replace(selectedPath, "").TrimStart('\\', '/');
-                string remoteDirPath = remotePath + "/" + relativeDir.Replace('\\', '/');
-                try { session.CreateDirectory(remoteDirPath); } catch { }
-            }
-            // 4. Upload checked files
-            long totalSize = checkedFiles.Sum(f => new FileInfo(f).Length);
-            long uploadedSize = 0;
-            progressBar1.Value = 0;
-            string originalPath = label3.Text;
-            richTextBox1.AppendText($"Starting upload of {checkedFiles.Count} files...\n");
-            richTextBox1.ScrollToCaret();
-            for (int i = 0; i < checkedFiles.Count; i++)
-            {
-                string currentFile = checkedFiles[i];
-                string fileName = Path.GetFileName(currentFile);
-                label3.Text = fileName;
-                long fileSize = new FileInfo(currentFile).Length;
-                string relativePath = currentFile.Replace(selectedPath, "").TrimStart('\\', '/');
-                string remoteFilePath = remotePath + "/" + relativePath.Replace('\\', '/');
-                string remoteDir = Path.GetDirectoryName(remoteFilePath).Replace('\\', '/');
-                TransferOptions transferOptions = new TransferOptions { TransferMode = TransferMode.Binary };
-                session.PutFiles(currentFile, remoteDir + "/", false, transferOptions);
-                // Set default permission 644 for all uploaded files
-                try { session.ExecuteCommand($"chmod 644 '{remoteFilePath}'"); } catch { }
-                uploadedSize += fileSize;
-                int progressPercent = totalSize > 0 ? (int)((uploadedSize * 100) / totalSize) : 0;
-                progressBar1.Value = Math.Min(progressPercent, 100);
-                richTextBox1.AppendText($"✓ {i + 1}/{checkedFiles.Count}: {fileName}\n");
-                richTextBox1.ScrollToCaret();
-            }
-            progressBar1.Value = 100;
-            richTextBox1.AppendText("Upload completed successfully!\n");
-            richTextBox1.ScrollToCaret();
-            Task.Delay(1000).ContinueWith(t =>
-            {
-                if (this.InvokeRequired)
-                    this.Invoke(new Action(() => progressBar1.Value = 0));
-                else
-                    progressBar1.Value = 0;
-            });
-            label3.Text = originalPath;
-        }
-
-        private void button3_Click(object sender, EventArgs e)
-        {
-            // BUTTON SAVE SETTINGS
-            try
-            {
-                // Validate required fields before saving
-                if (string.IsNullOrWhiteSpace(textBox1.Text) ||
-                    string.IsNullOrWhiteSpace(textBox2.Text) ||
-                    string.IsNullOrWhiteSpace(textBox3.Text) ||
-                    string.IsNullOrWhiteSpace(textBox4.Text) ||
-                    string.IsNullOrWhiteSpace(textBox5.Text))
-                {
-                    ShowLargeMessageBox("Cannot save settings. All fields (Host, Port, Username, Password, Remote Path) must be filled.", "Missing Fields", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    return;
-                }
-
-                // Use SaveFileDialog to let user choose filename and location
-                using (SaveFileDialog saveDialog = new SaveFileDialog())
-                {
-                    saveDialog.InitialDirectory = Application.StartupPath;
-                    saveDialog.Filter = "Settings files (*.txt)|*.txt|All files (*.*)|*.*";
-                    saveDialog.FileName = "MyProject_Settings.txt";
-                    saveDialog.Title = "Save Settings File";
-                    
-                    if (saveDialog.ShowDialog() == DialogResult.OK)
-                    {
-                        // Create settings content with encoded password
-                        string settingsContent = $"host={textBox1.Text}\n";
-                        settingsContent += $"port={textBox2.Text}\n";
-                        settingsContent += $"username={textBox3.Text}\n";
-                        settingsContent += $"password={EncodePassword(textBox4.Text)}\n";
-                        settingsContent += $"remotepath={textBox5.Text}\n";
-                        settingsContent += $"localpath={selectedPath}\n";
-                        settingsContent += $"saved_date={DateTime.Now:yyyy-MM-dd HH:mm:ss}\n";
-                        
-                        // Write to file
-                        File.WriteAllText(saveDialog.FileName, settingsContent);
-                        
-                        string fileName = Path.GetFileName(saveDialog.FileName);
-                        richTextBox1.AppendText($"Settings saved to: {fileName} (password encoded)\n");
-                        richTextBox1.ScrollToCaret();
-                    }
-                    else
-                    {
-                        richTextBox1.AppendText("Save cancelled.\n");
-                        richTextBox1.ScrollToCaret();
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                richTextBox1.AppendText($"Error saving settings: {ex.Message}\n");
-                richTextBox1.ScrollToCaret();
-            }
-        }
-
         private void button5_Click(object sender, EventArgs e)
-        {            // BUTTON LOAD SETTINGS
+        {   // BUTTON FOLDER REFRESH ONLY
+            richTextBox1.Clear();
+            // Only refresh logic, no settings loading
+            if (session != null && session.Opened)
+            {
+                // 1. Refresh TreeView from local folder
+                PopulateTreeViewWithCheckBoxes(selectedPath);
+                // 2. Collect local and remote structure
+                var localDirs = new HashSet<string>(Directory.GetDirectories(selectedPath, "*", SearchOption.AllDirectories)
+                    .Select(d => d.Substring(selectedPath.Length).TrimStart(Path.DirectorySeparatorChar).Replace("\\", "/")));
+                var localFiles = new HashSet<string>(Directory.GetFiles(selectedPath, "*", SearchOption.AllDirectories)
+                    .Select(f => f.Substring(selectedPath.Length).TrimStart(Path.DirectorySeparatorChar).Replace("\\", "/")));
+                var remoteListing = session.ListDirectory(remotePath);
+                var remoteDirs = new HashSet<string>();
+                var remoteFiles = new HashSet<string>();
+                void CollectRemote(WinSCP.RemoteDirectoryInfo dir, string relPath)
+                {
+                    foreach (var sub in dir.Files.Where(f => f.IsDirectory && f.Name != "." && f.Name != ".."))
+                    {
+                        string subRel = string.IsNullOrEmpty(relPath) ? sub.Name : relPath + "/" + sub.Name;
+                        remoteDirs.Add(subRel);
+                        CollectRemote(session.ListDirectory(remotePath + "/" + subRel), subRel);
+                    }
+                    foreach (var file in dir.Files.Where(f => !f.IsDirectory))
+                    {
+                        string fileRel = string.IsNullOrEmpty(relPath) ? file.Name : relPath + "/" + file.Name;
+                        remoteFiles.Add(fileRel);
+                    }
+                }
+                CollectRemote(remoteListing, "");
+
+                // 3. Find differences
+                var onlyLocalDirs = localDirs.Except(remoteDirs).OrderBy(x => x).ToList();
+                var onlyRemoteDirs = remoteDirs.Except(localDirs).OrderBy(x => x).ToList();
+                var onlyLocalFiles = localFiles.Except(remoteFiles).OrderBy(x => x).ToList();
+                var onlyRemoteFiles = remoteFiles.Except(localFiles).OrderBy(x => x).ToList();
+
+                // 4. Build enhanced message with diagnostics
+                var sb = new StringBuilder();
+                sb.AppendLine($"DIAGNOSTICS:");
+                sb.AppendLine($"onlyLocalDirs.Count: {onlyLocalDirs.Count}");
+                sb.AppendLine($"onlyRemoteDirs.Count: {onlyRemoteDirs.Count}");
+                sb.AppendLine($"onlyLocalFiles.Count: {onlyLocalFiles.Count}");
+                sb.AppendLine($"onlyRemoteFiles.Count: {onlyRemoteFiles.Count}");
+                sb.AppendLine();
+                if (onlyLocalDirs.Count > 0)
+                {
+                    sb.AppendLine("Sample onlyLocalDirs:");
+                    foreach (var d in onlyLocalDirs.Take(3))
+                        sb.AppendLine(d);
+                }
+                if (onlyRemoteDirs.Count > 0)
+                {
+                    sb.AppendLine("Sample onlyRemoteDirs:");
+                    foreach (var d in onlyRemoteDirs.Take(3))
+                        sb.AppendLine(d);
+                }
+                if (onlyLocalFiles.Count > 0)
+                {
+                    sb.AppendLine("Sample onlyLocalFiles:");
+                    foreach (var f in onlyLocalFiles.Take(3))
+                        sb.AppendLine(f);
+                }
+                if (onlyRemoteFiles.Count > 0)
+                {
+                    sb.AppendLine("Sample onlyRemoteFiles:");
+                    foreach (var f in onlyRemoteFiles.Take(3))
+                        sb.AppendLine(f);
+                }
+                sb.AppendLine();
+
+                if (onlyLocalDirs.Count == 0 && onlyRemoteDirs.Count == 0 && onlyLocalFiles.Count == 0 && onlyRemoteFiles.Count == 0)
+                {
+                    sb.AppendLine("Local and remote folder structures are the SAME.");
+                }
+                else
+                {
+                    sb.AppendLine("Local and remote folder structures are DIFFERENT.\n");
+
+                    // Add folder names only, one per line
+                    var allFolderNames = onlyLocalDirs.Concat(onlyRemoteDirs)
+                        .Select(path => {
+                            var parts = path.Split(new char[] {'/', '\\'}, StringSplitOptions.RemoveEmptyEntries);
+                            return parts.Length > 0 ? parts[parts.Length - 1] : path;
+                        })
+                        .Distinct()
+                        .ToList();
+                    // Move VS_CODE_EDIT_WORK_TEMP to the top if present
+                    var orderedFolderNames = allFolderNames
+                        .OrderBy(name => name == "VS_CODE_EDIT_WORK_TEMP" ? "" : name)
+                        .ToList();
+                    if (orderedFolderNames.Count > 0)
+                    {
+                        sb.AppendLine("Folder names:");
+                        foreach (var name in orderedFolderNames)
+                            sb.AppendLine(name);
+                        sb.AppendLine();
+                    }
+
+                    // ...existing code for summary and detailed listing...
+                    if (onlyLocalDirs.Count > 0 || onlyLocalFiles.Count > 0)
+                    {
+                        sb.AppendLine("To make REMOTE match LOCAL, upload:");
+                        if (onlyLocalDirs.Count > 0)
+                        {
+                            sb.AppendLine("  Folders:");
+                            foreach (var d in onlyLocalDirs) sb.AppendLine("    - " + d);
+                        }
+                        if (onlyLocalFiles.Count > 0)
+                        {
+                            sb.AppendLine("  Files:");
+                            foreach (var f in onlyLocalFiles) sb.AppendLine("    - " + f);
+                        }
+                        sb.AppendLine();
+                    }
+                    if (onlyLocalDirs.Count > 0)
+                    {
+                        sb.AppendLine("Folders only in LOCAL:");
+                        foreach (var d in onlyLocalDirs) sb.AppendLine("  - " + d);
+                        sb.AppendLine();
+                    }
+                    if (onlyRemoteDirs.Count > 0)
+                    {
+                        sb.AppendLine("Folders only in REMOTE:");
+                        foreach (var d in onlyRemoteDirs) sb.AppendLine("  - " + d);
+                        sb.AppendLine();
+                    }
+                    if (onlyLocalFiles.Count > 0)
+                    {
+                        sb.AppendLine("Files only in LOCAL:");
+                        foreach (var f in onlyLocalFiles) sb.AppendLine("  - " + f);
+                        sb.AppendLine();
+                    }
+                    if (onlyRemoteFiles.Count > 0)
+                    {
+                        sb.AppendLine("Files only in REMOTE:");
+                        foreach (var f in onlyRemoteFiles) sb.AppendLine("  - " + f);
+                        sb.AppendLine();
+                    }
+                }
+
+                // 5. Show in DifferencesDialog
+                using (var dlg = new DifferencesDialog(sb.ToString(), "Folder Differences"))
+                {
+                    dlg.ShowDialog(this);
+                }
+                return;
+            }
+        }
+
+        // === NEW: Button 7 for loading settings ===
+        private void button7_Click(object sender, EventArgs e)
+        {
+            richTextBox1.Clear();
             try
             {
                 // Use OpenFileDialog to let user choose settings file to load
@@ -696,25 +856,25 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
                     openDialog.CheckFileExists = true;
                     openDialog.CheckPathExists = true;
                     openDialog.Multiselect = false;
-                    
+
                     if (openDialog.ShowDialog() == DialogResult.OK)
                     {
                         // Read and parse the settings file
                         string[] lines = File.ReadAllLines(openDialog.FileName);
                         int loadedCount = 0;
-                        
+
                         foreach (string line in lines)
                         {
                             if (string.IsNullOrWhiteSpace(line) || !line.Contains("="))
                                 continue;
-                                
+
                             string[] parts = line.Split(new char[] { '=' }, 2);
                             if (parts.Length != 2)
                                 continue;
-                                
+
                             string key = parts[0].Trim().ToLower();
                             string value = parts[1].Trim();
-                            
+
                             switch (key)
                             {
                                 case "host":
@@ -743,7 +903,7 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
                                     {
                                         selectedPath = value;
                                         label3.Text = selectedPath;
-                                        
+
                                         // Update textBox6 with just the selected folder name
                                         string folderName = Path.GetFileName(selectedPath);
                                         if (string.IsNullOrEmpty(folderName))
@@ -767,7 +927,7 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
                                     break;
                             }
                         }
-                        
+
                         string fileName = Path.GetFileName(openDialog.FileName);
                         if (loadedCount > 0)
                         {
@@ -794,54 +954,11 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
             }
         }
 
-        // === NEW: Helper to collect checked files from TreeView ===
-        private List<string> GetCheckedFiles(TreeNodeCollection nodes)
-        {
-            List<string> files = new List<string>();
-            foreach (TreeNode node in nodes)
-            {
-                // If node is checked and is a file (leaf node)
-                if (node.Checked && node.Nodes.Count == 0 && node.Tag is string path && File.Exists(path))
-                {
-                    files.Add(path);
-                }
-                // Recurse into children
-                if (node.Nodes.Count > 0)
-                {
-                    files.AddRange(GetCheckedFiles(node.Nodes));
-                }
-            }
-            return files;
-        }
-
-        // === NEW: Helper to collect checked directories from TreeView (including parents of checked files) ===
-        private HashSet<string> GetCheckedDirectories(TreeNodeCollection nodes)
-        {
-            HashSet<string> dirs = new HashSet<string>();
-            foreach (TreeNode node in nodes)
-            {
-                // If node is checked and is a directory (has children)
-                if (node.Checked && node.Nodes.Count > 0 && node.Tag is string dirPath && Directory.Exists(dirPath))
-                {
-                    dirs.Add(dirPath);
-                }
-                // If any child is checked, add this directory
-                if (node.Nodes.Count > 0)
-                {
-                    var childDirs = GetCheckedDirectories(node.Nodes);
-                    if (childDirs.Count > 0 && node.Tag is string parentDir && Directory.Exists(parentDir))
-                    {
-                        dirs.Add(parentDir);
-                    }
-                    foreach (var d in childDirs) dirs.Add(d);
-                }
-            }
-            return dirs;
-        }
-
         // === NEW: Set permissions for selected files/folders in TreeView ===
         private void button6_Click(object sender, EventArgs e)
         {
+            richTextBox1.Clear();
+
             if (session == null || !session.Opened)
             {
                 ShowLargeMessageBox("Not connected to SFTP server.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
@@ -910,230 +1027,22 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
         }
 
         // Helper: Find the first checked node in the tree
-private TreeNode FindFirstCheckedNode(TreeNodeCollection nodes)
-{
-    foreach (TreeNode node in nodes)
-    {
-        if (node.Checked)
-            return node;
-        if (node.Nodes.Count > 0)
+        private TreeNode FindFirstCheckedNode(TreeNodeCollection nodes)
         {
-            TreeNode found = FindFirstCheckedNode(node.Nodes);
-            if (found != null)
-                return found;
-        }
-    }
-    return null;
-}
-// === Helper: Show a large font message box ===
-private DialogResult ShowLargeMessageBox(string message, string title, MessageBoxButtons buttons, MessageBoxIcon icon)
-{
-    using (Form form = new Form())
-    {
-        form.Text = title;
-        form.StartPosition = FormStartPosition.CenterParent;
-        form.FormBorderStyle = FormBorderStyle.FixedDialog;
-        form.MaximizeBox = false;
-        form.MinimizeBox = false;
-        form.ShowInTaskbar = false;
-        form.Size = new Size(480, 220);
-        form.Font = new Font(SystemFonts.MessageBoxFont.FontFamily, 14, FontStyle.Regular);
-
-        Label label = new Label()
-        {
-            AutoSize = false,
-            Text = message,
-            Dock = DockStyle.Fill,
-            TextAlign = ContentAlignment.MiddleCenter,
-            Font = new Font(SystemFonts.MessageBoxFont.FontFamily, 14, FontStyle.Regular)
-        };
-        form.Controls.Add(label);
-
-        FlowLayoutPanel panel = new FlowLayoutPanel()
-        {
-            Dock = DockStyle.Bottom,
-            FlowDirection = FlowDirection.RightToLeft,
-            Height = 60
-        };
-        form.Controls.Add(panel);
-
-        DialogResult result = DialogResult.None;
-        void AddButton(string text, DialogResult dr)
-        {
-            Button btn = new Button()
+            foreach (TreeNode node in nodes)
             {
-                Text = text,
-                DialogResult = dr,
-                Font = new Font(SystemFonts.MessageBoxFont.FontFamily, 14, FontStyle.Regular),
-                AutoSize = true,
-                Margin = new Padding(10, 10, 10, 10)
-            };
-            btn.Click += (s, e) => { result = dr; form.Close(); };
-            panel.Controls.Add(btn);
-        }
-        if (buttons == MessageBoxButtons.OK)
-            AddButton("OK", DialogResult.OK);
-        else if (buttons == MessageBoxButtons.OKCancel)
-        {
-            AddButton("Cancel", DialogResult.Cancel);
-            AddButton("OK", DialogResult.OK);
-        }
-        else if (buttons == MessageBoxButtons.YesNo)
-        {
-            AddButton("No", DialogResult.No);
-            AddButton("Yes", DialogResult.Yes);
-        }
-        else if (buttons == MessageBoxButtons.YesNoCancel)
-        {
-            AddButton("Cancel", DialogResult.Cancel);
-            AddButton("No", DialogResult.No);
-            AddButton("Yes", DialogResult.Yes);
-        }
-        // Icon (optional)
-        if (icon != MessageBoxIcon.None)
-        {
-            PictureBox pb = new PictureBox()
-            {
-                Size = new Size(48, 48),
-                Location = new Point(20, 20),
-                SizeMode = PictureBoxSizeMode.StretchImage
-            };
-            switch (icon)
-            {
-                case MessageBoxIcon.Error:
-                    pb.Image = SystemIcons.Error.ToBitmap(); break;
-                case MessageBoxIcon.Warning:
-                    pb.Image = SystemIcons.Warning.ToBitmap(); break;
-                case MessageBoxIcon.Information:
-                    pb.Image = SystemIcons.Information.ToBitmap(); break;
-                case MessageBoxIcon.Question:
-                    pb.Image = SystemIcons.Question.ToBitmap(); break;
-            }
-            form.Controls.Add(pb);
-            label.Padding = new Padding(80, 20, 20, 20);
-        }
-        form.AcceptButton = panel.Controls.OfType<Button>().FirstOrDefault();
-        form.CancelButton = panel.Controls.OfType<Button>().FirstOrDefault(b => b.DialogResult == DialogResult.Cancel);
-        result = form.ShowDialog();
-        return result;
-    }
-}
-        // === NEW: Refresh TreeView if folder structure changed ===
-        private void RefreshTreeViewIfChanged()
-        {
-            if (string.IsNullOrEmpty(selectedPath) || !Directory.Exists(selectedPath))
-                return;
-
-            // Helper: Recursively get all relative paths from disk
-            List<string> GetAllDiskPaths(string root)
-            {
-                var all = new List<string>();
-                foreach (var dir in Directory.GetDirectories(root, "*", SearchOption.AllDirectories))
-                    all.Add(dir.Substring(selectedPath.Length).TrimStart(Path.DirectorySeparatorChar));
-                foreach (var file in Directory.GetFiles(root, "*", SearchOption.AllDirectories))
-                    all.Add(file.Substring(selectedPath.Length).TrimStart(Path.DirectorySeparatorChar));
-                return all;
-            }
-            // Helper: Recursively get all relative paths from TreeView
-            List<string> GetAllTreePaths(TreeNodeCollection nodes)
-            {
-                var all = new List<string>();
-                foreach (TreeNode node in nodes)
+                if (node.Checked)
+                    return node;
+                if (node.Nodes.Count > 0)
                 {
-                    if (node.Tag is string path && path.StartsWith(selectedPath))
-                        all.Add(path.Substring(selectedPath.Length).TrimStart(Path.DirectorySeparatorChar));
-                    if (node.Nodes.Count > 0)
-                        all.AddRange(GetAllTreePaths(node.Nodes));
-                }
-                return all;
-            }
-            var diskPaths = GetAllDiskPaths(selectedPath);
-            var treePaths = GetAllTreePaths(treeView1.Nodes);
-            diskPaths.Sort();
-            treePaths.Sort();
-            if (!diskPaths.SequenceEqual(treePaths))
-            {
-                // Save checked states
-                var checkedSet = new HashSet<string>(GetCheckedFiles(treeView1.Nodes).Concat(GetCheckedDirectories(treeView1.Nodes)));
-                PopulateTreeViewWithCheckBoxes(selectedPath);
-                // Restore checked states
-                void RestoreChecked(TreeNodeCollection nodes)
-                {
-                    foreach (TreeNode node in nodes)
-                    {
-                        if (node.Tag is string path && checkedSet.Contains(path))
-                            node.Checked = true;
-                        if (node.Nodes.Count > 0)
-                            RestoreChecked(node.Nodes);
-                    }
-                }
-                RestoreChecked(treeView1.Nodes);
-                // Show short message in label3 instead of expanding all nodes or showing a message box
-                label3.Text = "Tree updated, review new files/folders.";
-            }
-        }
-
-        private void MirrorDeleteRemoteExtra(Session session, string localRoot, string remoteRoot)
-        {
-            // Get all local relative paths
-            var localDirs = new HashSet<string>(Directory.GetDirectories(localRoot, "*", SearchOption.AllDirectories)
-                .Select(d => d.Substring(localRoot.Length).TrimStart(Path.DirectorySeparatorChar).Replace('\\', '/')));
-            var localFiles = new HashSet<string>(Directory.GetFiles(localRoot, "*", SearchOption.AllDirectories)
-                .Select(f => f.Substring(localRoot.Length).TrimStart(Path.DirectorySeparatorChar).Replace('\\', '/')));
-
-            // List all remote files and directories recursively
-            RemoteDirectoryInfo remoteListing = session.ListDirectory(remoteRoot);
-            var remoteDirs = new List<string>();
-            var remoteFiles = new List<string>();
-            void CollectRemote(RemoteDirectoryInfo dir, string relPath)
-            {
-                foreach (var sub in dir.Files.Where(f => f.IsDirectory && f.Name != "." && f.Name != ".."))
-                {
-                    string subRel = string.IsNullOrEmpty(relPath) ? sub.Name : relPath + "/" + sub.Name;
-                    remoteDirs.Add(subRel);
-                    CollectRemote(session.ListDirectory(remoteRoot + "/" + subRel), subRel);
-                }
-                foreach (var file in dir.Files.Where(f => !f.IsDirectory))
-                {
-                    string fileRel = string.IsNullOrEmpty(relPath) ? file.Name : relPath + "/" + file.Name;
-                    remoteFiles.Add(fileRel);
+                    TreeNode found = FindFirstCheckedNode(node.Nodes);
+                    if (found != null)
+                        return found;
                 }
             }
-            CollectRemote(remoteListing, "");
-
-            // Delete remote files not in local
-            foreach (var remoteFile in remoteFiles)
-            {
-                if (!localFiles.Contains(remoteFile.Replace('/', Path.DirectorySeparatorChar)))
-                {
-                    try
-                    {
-                        session.RemoveFiles(remoteRoot + "/" + remoteFile);
-                        richTextBox1.AppendText($"Deleted remote file: {remoteFile}\n");
-                    }
-                    catch (Exception ex)
-                    {
-                        richTextBox1.AppendText($"Failed to delete remote file {remoteFile}: {ex.Message}\n");
-                    }
-                }
-            }
-            // Delete remote directories not in local (reverse order for safe delete)
-            foreach (var remoteDir in remoteDirs.OrderByDescending(s => s.Length))
-            {
-                if (!localDirs.Contains(remoteDir.Replace('/', Path.DirectorySeparatorChar)))
-                {
-                    try
-                    {
-                        session.RemoveFiles(remoteRoot + "/" + remoteDir + "/");
-                        richTextBox1.AppendText($"Deleted remote folder: {remoteDir}\n");
-                    }
-                    catch (Exception ex)
-                    {
-                        richTextBox1.AppendText($"Failed to delete remote folder {remoteDir}: {ex.Message}\n");
-                    }
-                }
-            }
+            return null;
         }
+
 
         // Highlight expanded node by selecting it
         private void TreeView1_AfterExpand(object sender, TreeViewEventArgs e)
@@ -1147,27 +1056,195 @@ private DialogResult ShowLargeMessageBox(string message, string title, MessageBo
             if (e.Node.Parent != null)
                 treeView1.SelectedNode = e.Node.Parent;
         }
-        
-        /*
-        // Select node when its checkbox is clicked
-        private void TreeView1_AfterCheck(object sender, TreeViewEventArgs e)
+
+
+        // === NEW: Helper to collect checked files from TreeView ===
+        private List<string> GetCheckedFiles(TreeNodeCollection nodes)
         {
-            // Prevent recursive event firing
-            treeView1.AfterCheck -= TreeView1_AfterCheck;
+            List<string> files = new List<string>();
+            foreach (TreeNode node in nodes)
+            {
+                // If node is checked and is a file (leaf node)
+                if (node.Checked && node.Nodes.Count == 0 && node.Tag is string path && File.Exists(path))
+                {
+                    files.Add(path);
+                }
+                // Recurse into children
+                if (node.Nodes.Count > 0)
+                {
+                    files.AddRange(GetCheckedFiles(node.Nodes));
+                }
+            }
+            return files;
+        }
+
+        // === NEW: Helper to collect checked directories from TreeView (including parents of checked files) ===
+        private HashSet<string> GetCheckedDirectories(TreeNodeCollection nodes)
+        {
+            HashSet<string> dirs = new HashSet<string>();
+            foreach (TreeNode node in nodes)
+            {
+                // If node is checked and is a directory (has children)
+                if (node.Checked && node.Nodes.Count > 0 && node.Tag is string dirPath && Directory.Exists(dirPath))
+                {
+                    dirs.Add(dirPath);
+                }
+                // If any child is checked, add this directory
+                if (node.Nodes.Count > 0)
+                {
+                    var childDirs = GetCheckedDirectories(node.Nodes);
+                    if (childDirs.Count > 0 && node.Tag is string parentDir && Directory.Exists(parentDir))
+                    {
+                        dirs.Add(parentDir);
+                    }
+                    foreach (var d in childDirs) dirs.Add(d);
+                }
+            }
+            return dirs;
+        }
+
+        // === NEW: Compare local and remote folder structure ===
+        private bool CompareLocalAndRemoteStructure(string localRoot, string remoteRoot)
+        {
             try
             {
-                // Check/uncheck all children
-                SetChildNodesChecked(e.Node, e.Node.Checked);
-                // Optionally, update parent nodes (if all siblings checked, check parent)
-                UpdateParentNodesChecked(e.Node);
-                // Select the node that was just checked/unchecked
-                treeView1.SelectedNode = e.Node;
+                if (string.IsNullOrEmpty(localRoot) || !Directory.Exists(localRoot) || session == null || !session.Opened)
+                    return false;
+                // Get all local relative paths
+                var localDirs = new HashSet<string>(Directory.GetDirectories(localRoot, "*", SearchOption.AllDirectories)
+                    .Select(d => d.Substring(localRoot.Length).TrimStart(Path.DirectorySeparatorChar).Replace('\\', '/')));
+                var localFiles = new HashSet<string>(Directory.GetFiles(localRoot, "*", SearchOption.AllDirectories)
+                    .Select(f => f.Substring(localRoot.Length).TrimStart(Path.DirectorySeparatorChar).Replace('\\', '/')));
+
+                // List all remote files and directories recursively
+                RemoteDirectoryInfo remoteListing = session.ListDirectory(remoteRoot);
+                var remoteDirs = new HashSet<string>();
+                var remoteFiles = new HashSet<string>();
+                void CollectRemote(RemoteDirectoryInfo dir, string relPath)
+                {
+                    foreach (var sub in dir.Files.Where(f => f.IsDirectory && f.Name != "." && f.Name != ".."))
+                    {
+                        string subRel = string.IsNullOrEmpty(relPath) ? sub.Name : relPath + "/" + sub.Name;
+                        remoteDirs.Add(subRel);
+                        CollectRemote(session.ListDirectory(remoteRoot + "/" + subRel), subRel);
+                    }
+                    foreach (var file in dir.Files.Where(f => !f.IsDirectory))
+                    {
+                        string fileRel = string.IsNullOrEmpty(relPath) ? file.Name : relPath + "/" + file.Name;
+                        remoteFiles.Add(fileRel);
+                    }
+                }
+                CollectRemote(remoteListing, "");
+
+                // Compare sets
+                bool dirsEqual = localDirs.SetEquals(remoteDirs);
+                bool filesEqual = localFiles.SetEquals(remoteFiles);
+                return dirsEqual && filesEqual;
             }
-            finally
+            catch
             {
-                treeView1.AfterCheck += TreeView1_AfterCheck;
+                return false;
             }
         }
-        */
-    }
+        // === END NEW ===
+
+        // === NEW: Helper to show a large font message box ===
+        private DialogResult ShowLargeMessageBox(string message, string title, MessageBoxButtons buttons, MessageBoxIcon icon)
+        {
+            using (Form form = new Form())
+            {
+                form.Text = title;
+                form.StartPosition = FormStartPosition.CenterParent;
+                form.FormBorderStyle = FormBorderStyle.FixedDialog;
+                form.MaximizeBox = false;
+                form.MinimizeBox = false;
+                form.ShowInTaskbar = false;
+                form.Size = new Size(480, 220);
+                form.Font = new Font(SystemFonts.MessageBoxFont.FontFamily, 14, FontStyle.Regular);
+
+                Label label = new Label()
+                {
+                    AutoSize = false,
+                    Text = message,
+                    Dock = DockStyle.Fill,
+                    TextAlign = ContentAlignment.MiddleCenter,
+                    Font = new Font(SystemFonts.MessageBoxFont.FontFamily, 14, FontStyle.Regular)
+                };
+                form.Controls.Add(label);
+
+                FlowLayoutPanel panel = new FlowLayoutPanel()
+                {
+                    Dock = DockStyle.Bottom,
+                    FlowDirection = FlowDirection.RightToLeft,
+                    Height = 60
+                };
+                form.Controls.Add(panel);
+
+                DialogResult result = DialogResult.None;
+                void AddButton(string text, DialogResult dr)
+                {
+                    Button btn = new Button()
+                    {
+                        Text = text,
+                        DialogResult = dr,
+                        Font = new Font(SystemFonts.MessageBoxFont.FontFamily, 14, FontStyle.Regular),
+                        AutoSize = true,
+                        Margin = new Padding(10, 10, 10, 10)
+                    };
+                    btn.Click += (s, e) => { result = dr; form.Close(); };
+                    panel.Controls.Add(btn);
+                }
+                if (buttons == MessageBoxButtons.OK)
+                    AddButton("OK", DialogResult.OK);
+                else if (buttons == MessageBoxButtons.OKCancel)
+                {
+                    AddButton("Cancel", DialogResult.Cancel);
+                    AddButton("OK", DialogResult.OK);
+                }
+                else if (buttons == MessageBoxButtons.YesNo)
+                {
+                    AddButton("No", DialogResult.No);
+                    AddButton("Yes", DialogResult.Yes);
+                }
+                else if (buttons == MessageBoxButtons.YesNoCancel)
+                {
+                    AddButton("Cancel", DialogResult.Cancel);
+                    AddButton("No", DialogResult.No);
+                    AddButton("Yes", DialogResult.Yes);
+                }
+                // Icon (optional)
+                if (icon != MessageBoxIcon.None)
+                {
+                    PictureBox pb = new PictureBox()
+                    {
+                        Size = new Size(48, 48),
+                        Location = new Point(20, 20),
+                        SizeMode = PictureBoxSizeMode.StretchImage
+                    };
+                    switch (icon)
+                    {
+                        case MessageBoxIcon.Error:
+                            pb.Image = SystemIcons.Error.ToBitmap(); break;
+                        case MessageBoxIcon.Warning:
+                            pb.Image = SystemIcons.Warning.ToBitmap(); break;
+                        case MessageBoxIcon.Information:
+                            pb.Image = SystemIcons.Information.ToBitmap(); break;
+                        case MessageBoxIcon.Question:
+                            pb.Image = SystemIcons.Question.ToBitmap(); break;
+                    }
+                    form.Controls.Add(pb);
+                    label.Padding = new Padding(80, 20, 20, 20);
+                }
+                form.AcceptButton = panel.Controls.OfType<Button>().FirstOrDefault();
+                form.CancelButton = panel.Controls.OfType<Button>().FirstOrDefault(b => b.DialogResult == DialogResult.Cancel);
+                result = form.ShowDialog();
+                return result;
+            }
+        }
+
+        // ...existing code...
+    } // End of Form1 class
+    
+    
+    // End of namespace
 }
