@@ -4,7 +4,7 @@ A professional Windows Forms application for secure file transfer via SFTP proto
 
 ## 📸 Application Screenshot
 
-mini_ftp_uploader.jpg
+![Alt text](mini_ftp_uploader.jpg)
 *Add your application screenshot here*
 
 ## 🚀 Features
