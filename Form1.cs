@@ -14,6 +14,17 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
 
     public partial class Form1 : Form
     {
+        // === GLOBAL STATE FIELDS FOR RELIABLE TREEVIEW AND UPLOAD LOGIC ===
+        // Tracks newly added folders after refresh
+        private List<string> newlyAddedFolders = new List<string>();
+        // Tracks all currently checked (selected for upload) folders and files
+        private HashSet<string> checkedPaths = new HashSet<string>();
+        // Tracks the last selected node path in the TreeView
+        private string lastSelectedNodePath = null;
+        // Tracks the list of loaded settings files (if you want to support multiple)
+        private List<string> loadedSettingsFiles = new List<string>();
+        // Tracks the current root folder loaded in the TreeView
+        private string currentLoadedRootFolder = null;
         Session session = new WinSCP.Session();
 
         // New: RichTextBox for differences
@@ -26,6 +37,9 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
         string password = string.Empty;
         string fingerprint = string.Empty;
         string remotePath = string.Empty; // Adjust this to your remote path
+
+        // Reference to the non-modal differences dialog
+        private DifferencesDialog differencesDialog = null;
 
         public Form1()
         {
@@ -696,9 +710,19 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
             // Only refresh logic, no settings loading
             if (session != null && session.Opened)
             {
-                // 1. Refresh TreeView from local folder
+                // 1. Collect previous local directories and checked paths before refresh
+                var previousLocalDirs = new HashSet<string>();
+                var previousCheckedPaths = new HashSet<string>(checkedPaths); // Use global checkedPaths
+                if (!string.IsNullOrEmpty(selectedPath) && Directory.Exists(selectedPath))
+                {
+                    previousLocalDirs = new HashSet<string>(Directory.GetDirectories(selectedPath, "*", SearchOption.AllDirectories)
+                        .Select(d => d.Substring(selectedPath.Length).TrimStart(Path.DirectorySeparatorChar).Replace("\\", "/")));
+                }
+
+                // 2. Refresh TreeView from local folder
                 PopulateTreeViewWithCheckBoxes(selectedPath);
-                // 2. Collect local and remote structure
+
+                // 3. Collect current local and remote structure
                 var localDirs = new HashSet<string>(Directory.GetDirectories(selectedPath, "*", SearchOption.AllDirectories)
                     .Select(d => d.Substring(selectedPath.Length).TrimStart(Path.DirectorySeparatorChar).Replace("\\", "/")));
                 var localFiles = new HashSet<string>(Directory.GetFiles(selectedPath, "*", SearchOption.AllDirectories)
@@ -722,13 +746,16 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
                 }
                 CollectRemote(remoteListing, "");
 
-                // 3. Find differences
+                // 4. Find differences
                 var onlyLocalDirs = localDirs.Except(remoteDirs).OrderBy(x => x).ToList();
                 var onlyRemoteDirs = remoteDirs.Except(localDirs).OrderBy(x => x).ToList();
                 var onlyLocalFiles = localFiles.Except(remoteFiles).OrderBy(x => x).ToList();
                 var onlyRemoteFiles = remoteFiles.Except(localFiles).OrderBy(x => x).ToList();
 
-                // 4. Build enhanced message with diagnostics
+                // 5. Detect newly added local folders (since last refresh)
+                var newLocalDirs = localDirs.Except(previousLocalDirs).ToList();
+
+                // 6. Build enhanced message with diagnostics
                 var sb = new StringBuilder();
                 sb.AppendLine($"DIAGNOSTICS:");
                 sb.AppendLine($"onlyLocalDirs.Count: {onlyLocalDirs.Count}");
@@ -772,8 +799,9 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
 
                     // Add folder names only, one per line
                     var allFolderNames = onlyLocalDirs.Concat(onlyRemoteDirs)
-                        .Select(path => {
-                            var parts = path.Split(new char[] {'/', '\\'}, StringSplitOptions.RemoveEmptyEntries);
+                        .Select(path =>
+                        {
+                            var parts = path.Split(new char[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries);
                             return parts.Length > 0 ? parts[parts.Length - 1] : path;
                         })
                         .Distinct()
@@ -832,14 +860,104 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
                     }
                 }
 
-                // 5. Show in DifferencesDialog
-                using (var dlg = new DifferencesDialog(sb.ToString(), "Folder Differences"))
+                // 7. Show in DifferencesDialog
+                string diagnosticsText = sb.ToString();
+                if (differencesDialog == null || differencesDialog.IsDisposed)
                 {
-                    dlg.ShowDialog(this);
+                    differencesDialog = new DifferencesDialog(diagnosticsText, "Folder Differences");
+                    differencesDialog.FormClosed += (s, args) => { differencesDialog = null; };
+                    differencesDialog.Show(this);
+                }
+                else
+                {
+                    // Update content if already open
+                    differencesDialog.UpdateContent(diagnosticsText);
+                    differencesDialog.BringToFront();
+                }
+
+                // 8. After dialog, expand and check all subfolders of the parent folder (not main/root) for each folder only in LOCAL
+                // Parse "Folders only in LOCAL" section from diagnosticsText
+                var foldersOnlyInLocal = new List<string>();
+                var lines = diagnosticsText.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
+                bool inFoldersSection = false;
+                foreach (var line in lines)
+                {
+                    if (line.Trim().StartsWith("Folders only in LOCAL:"))
+                    {
+                        inFoldersSection = true;
+                        continue;
+                    }
+                    if (inFoldersSection)
+                    {
+                        if (line.Trim().StartsWith("- "))
+                        {
+                            var folderRel = line.Trim().Substring(2).Trim();
+                            if (!string.IsNullOrEmpty(folderRel))
+                                foldersOnlyInLocal.Add(folderRel);
+                        }
+                        else if (!line.Trim().StartsWith("- ") && line.Trim() != "")
+                        {
+                            // End of section
+                            break;
+                        }
+                    }
+                }
+
+                foreach (var folderRel in foldersOnlyInLocal)
+                {
+                    string fullPath = Path.Combine(selectedPath, folderRel.Replace('/', Path.DirectorySeparatorChar));
+                    fullPath = Path.GetFullPath(fullPath).TrimEnd(Path.DirectorySeparatorChar).ToLowerInvariant();
+                    TreeNode targetNode = FindNodeByPathNormalized(treeView1.Nodes, fullPath);
+                    if (targetNode != null)
+                    {
+                        ExpandToNode(targetNode);
+                        targetNode.Expand();
+                        targetNode.Checked = true;
+                        SetChildNodesChecked(targetNode, true);
+                        treeView1.SelectedNode = targetNode;
+                        treeView1.Update();
+                        richTextBox1.AppendText($"Expanded and checked only the new/different folder and its children: {targetNode.Text}\n");
+                    }
+                    else
+                    {
+                        richTextBox1.AppendText($"Could not find node for: {fullPath}\n");
+                    }
                 }
                 return;
             }
         }
+
+        // Helper: Find a TreeNode by its normalized full path (case-insensitive, trimmed)
+        private TreeNode FindNodeByPathNormalized(TreeNodeCollection nodes, string normalizedFullPath)
+        {
+            foreach (TreeNode node in nodes)
+            {
+                if (node.Tag is string tag)
+                {
+                    string nodePath = Path.GetFullPath(tag).TrimEnd(Path.DirectorySeparatorChar).ToLowerInvariant();
+                    if (nodePath == normalizedFullPath)
+                        return node;
+                }
+                if (node.Nodes.Count > 0)
+                {
+                    TreeNode found = FindNodeByPathNormalized(node.Nodes, normalizedFullPath);
+                    if (found != null) return found;
+                }
+            }
+            return null;
+        }
+
+        // Helper: Expand all parent nodes to a given node
+        private void ExpandToNode(TreeNode node)
+        {
+            TreeNode current = node;
+            while (current.Parent != null)
+            {
+                current.Parent.Expand();
+                current = current.Parent;
+            }
+        }
+        
 
         // === NEW: Button 7 for loading settings ===
         private void button7_Click(object sender, EventArgs e)

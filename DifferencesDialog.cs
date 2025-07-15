@@ -7,6 +7,8 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
 {
     public class DifferencesDialog : Form
     {
+        private RichTextBox richTextBox;
+
         public DifferencesDialog(string message, string title, Color? backgroundColor = null, Color? textColor = null)
         {
             this.Text = title;
@@ -18,7 +20,7 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
             this.Size = new Size(700, 700);
             this.Font = new Font(SystemFonts.MessageBoxFont.FontFamily, 12, FontStyle.Bold);
 
-            var richTextBox = new RichTextBox()
+            richTextBox = new RichTextBox()
             {
                 Dock = DockStyle.Fill,
                 Font = new Font(SystemFonts.MessageBoxFont.FontFamily, 12, FontStyle.Bold),
@@ -51,6 +53,18 @@ namespace C_SHARP_MNI_FTP_UPLOADER_2025
             okButton.Click += (s, e) => this.Close();
             panel.Controls.Add(okButton);
             this.AcceptButton = okButton;
+        }
+
+        // Allow updating the content if dialog is already open
+        public void UpdateContent(string message)
+        {
+            if (InvokeRequired)
+            {
+                Invoke(new Action(() => UpdateContent(message)));
+                return;
+            }
+            if (richTextBox != null)
+                richTextBox.Text = message;
         }
 
         private void InitializeComponent()
